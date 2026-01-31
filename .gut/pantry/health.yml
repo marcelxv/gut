@@ -1,0 +1,25 @@
+# Environment Health Configuration
+# Used by `gut doctor` to verify your setup
+
+# ports:
+#   - 3000: "frontend dev server"
+#   - 3001: "api server"
+#   - 5432: "postgres"
+
+# env:
+#   required:
+#     - DATABASE_URL
+#     - API_KEY
+#   optional:
+#     - DEBUG
+#     - LOG_LEVEL
+
+# services:
+#   - postgres
+#   - redis
+
+# commands:
+#   - name: "node"
+#     check: "node --version"
+#   - name: "npm"
+#     check: "npm --version"

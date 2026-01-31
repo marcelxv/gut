@@ -1,0 +1,3161 @@
+#!/usr/bin/env bash
+#
+#   gut - AI-native development workflow
+#   "Trust your gut. Ship with confidence."
+#
+#   Cooking metaphor for the AI dev era:
+#   recipe → prep → cook → taste → serve
+#
+
+set -e
+
+GUT_VERSION="0.4.0"
+GUT_DIR=".gut"
+GUT_PANTRY="$GUT_DIR/pantry"
+GUT_RECIPES="$GUT_DIR/recipes"
+GUT_PREP="$GUT_DIR/prep"
+GUT_PLATED="$GUT_DIR/plated"
+GUT_SEASONING="$GUT_DIR/seasoning"
+GUT_FLAME="$GUT_DIR/flame"
+GUT_MODES="$GUT_DIR/modes"
+
+#-----------------------------------------------------------------------------
+# Internationalization (i18n) - Bash 3.x compatible
+#-----------------------------------------------------------------------------
+
+# Detect language from GUT_LANG or LANG environment variable
+detect_language() {
+    local lang="${GUT_LANG:-$LANG}"
+    if [[ "$lang" =~ ^pt ]]; then
+        echo "pt"
+    else
+        echo "en"
+    fi
+}
+
+GUT_LANG_CODE=$(detect_language)
+
+# Translation function - Bash 3.x compatible (no associative arrays)
+t() {
+    local key="$1"
+
+    if [[ "$GUT_LANG_CODE" == "pt" ]]; then
+        case "$key" in
+            help_title) echo "Fluxo de desenvolvimento nativo para IA" ;;
+            help_tagline) echo "Confie no seu instinto. Entregue com confiança." ;;
+            setting_up) echo "Configurando a cozinha..." ;;
+            kitchen_exists) echo "A cozinha já existe" ;;
+            kitchen_initialized) echo "Cozinha inicializada!" ;;
+            next_steps) echo "Próximos passos" ;;
+            no_recipes) echo "Nenhuma receita ainda" ;;
+            recipe_created) echo "Receita criada" ;;
+            prep_created) echo "Arquivo de preparação criado!" ;;
+            kitchen_hot) echo "A cozinha está quente! Hora de cozinhar." ;;
+            cooking) echo "Cozinhando" ;;
+            tasting) echo "Provando" ;;
+            serving) echo "Servindo" ;;
+            prepping) echo "Preparando" ;;
+            open_questions) echo "Perguntas em Aberto" ;;
+            no_questions) echo "Nenhuma pergunta em aberto encontrada" ;;
+            answer_saved) echo "Resposta salva na receita!" ;;
+            step_done) echo "Passo marcado como concluído!" ;;
+            pending_steps) echo "Passos Pendentes" ;;
+            progress) echo "Progresso" ;;
+            resume_title) echo "Continue de onde parou" ;;
+            branch_label) echo "Branch" ;;
+            recipes_branch) echo "Receitas neste branch" ;;
+            no_recipes_branch) echo "Nenhuma receita vinculada a este branch" ;;
+            files_changed) echo "Arquivos alterados" ;;
+            no_files_changed) echo "Nenhum arquivo alterado ainda" ;;
+            recent_commits) echo "Commits recentes" ;;
+            quick_fixes) echo "Correções rápidas" ;;
+            tip) echo "Dica" ;;
+            *) echo "$key" ;;
+        esac
+    else
+        case "$key" in
+            help_title) echo "AI-native development workflow" ;;
+            help_tagline) echo "Trust your gut. Ship with confidence." ;;
+            setting_up) echo "Setting up the kitchen..." ;;
+            kitchen_exists) echo "Kitchen already exists" ;;
+            kitchen_initialized) echo "Kitchen initialized!" ;;
+            next_steps) echo "Next steps" ;;
+            no_recipes) echo "No recipes yet" ;;
+            recipe_created) echo "Recipe created" ;;
+            prep_created) echo "Prep file created!" ;;
+            kitchen_hot) echo "Kitchen is hot! Time to cook." ;;
+            cooking) echo "Cooking" ;;
+            tasting) echo "Tasting" ;;
+            serving) echo "Serving" ;;
+            prepping) echo "Prepping" ;;
+            open_questions) echo "Open Questions" ;;
+            no_questions) echo "No open questions found" ;;
+            answer_saved) echo "Answer saved to recipe!" ;;
+            step_done) echo "Step marked as done!" ;;
+            pending_steps) echo "Pending Steps" ;;
+            progress) echo "Progress" ;;
+            resume_title) echo "Pick up where you left off" ;;
+            branch_label) echo "Branch" ;;
+            recipes_branch) echo "Recipes on this branch" ;;
+            no_recipes_branch) echo "No recipes linked to this branch" ;;
+            files_changed) echo "Files changed" ;;
+            no_files_changed) echo "No files changed yet" ;;
+            recent_commits) echo "Recent commits" ;;
+            quick_fixes) echo "Quick fixes" ;;
+            tip) echo "Tip" ;;
+            *) echo "$key" ;;
+        esac
+    fi
+}
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Emoji (because cooking should be fun)
+CHEF="🧑‍🍳"
+RECIPE="📝"
+PREP="🥗"
+COOK="🍳"
+TASTE="👅"
+SERVE="🍽️"
+FIRE="🔥"
+CHECK="✅"
+WARN="⚠️"
+PANTRY="🥫"
+SEASON="🧂"
+FLAME="🔥"
+DOCTOR="🩺"
+SALT="🧂"
+
+#-----------------------------------------------------------------------------
+# Helpers
+#-----------------------------------------------------------------------------
+
+gut_print() {
+    echo -e "${1}"
+}
+
+gut_header() {
+    echo ""
+    gut_print "${BOLD}${CYAN}$1${NC}"
+    echo ""
+}
+
+gut_success() {
+    gut_print "${GREEN}${CHECK} $1${NC}"
+}
+
+gut_warn() {
+    gut_print "${YELLOW}${WARN} $1${NC}"
+}
+
+gut_error() {
+    gut_print "${RED}Error: $1${NC}" >&2
+    exit 1
+}
+
+gut_check_init() {
+    if [[ ! -d "$GUT_DIR" ]]; then
+        gut_error "Not a gut kitchen. Run 'gut init' first."
+    fi
+}
+
+# Generate a slug from a name
+slugify() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//'
+}
+
+# Get current timestamp
+timestamp() {
+    date +"%Y-%m-%d %H:%M:%S"
+}
+
+# Get current date for filenames
+datestamp() {
+    date +"%Y%m%d"
+}
+
+#-----------------------------------------------------------------------------
+# Branch Management Helpers
+#-----------------------------------------------------------------------------
+
+# Get current git branch
+get_current_branch() {
+    git branch --show-current 2>/dev/null || echo ""
+}
+
+# Check if we're in a git repo
+is_git_repo() {
+    git rev-parse --git-dir > /dev/null 2>&1
+}
+
+# Get the branch linked to a recipe
+get_recipe_branch() {
+    local recipe_file="$1"
+    grep -m1 "^branch:" "$recipe_file" 2>/dev/null | sed 's/^branch: *//' || echo ""
+}
+
+# Set branch in recipe metadata
+set_recipe_branch() {
+    local recipe_file="$1"
+    local branch="$2"
+
+    if grep -q "^branch:" "$recipe_file" 2>/dev/null; then
+        # Update existing branch
+        sed -i.bak "s|^branch:.*|branch: $branch|" "$recipe_file" && rm -f "${recipe_file}.bak"
+    else
+        # Add branch after status line
+        sed -i.bak "/^status:/a\\
+branch: $branch" "$recipe_file" && rm -f "${recipe_file}.bak"
+    fi
+}
+
+# Get all recipes linked to a branch
+get_branch_recipes() {
+    local branch="$1"
+    local recipes=()
+
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local recipe_branch=$(get_recipe_branch "$recipe")
+        if [[ "$recipe_branch" == "$branch" ]]; then
+            recipes+=("$(basename "$recipe" .md)")
+        fi
+    done
+
+    echo "${recipes[@]}"
+}
+
+# Get all cooking/tasting recipes on current branch
+get_active_branch_recipes() {
+    local branch=$(get_current_branch)
+    local recipes=()
+
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local recipe_branch=$(get_recipe_branch "$recipe")
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+
+        if [[ "$recipe_branch" == "$branch" ]] && [[ "$status" == "cooking" || "$status" == "tasting" ]]; then
+            recipes+=("$(basename "$recipe" .md)")
+        fi
+    done
+
+    echo "${recipes[@]}"
+}
+
+#-----------------------------------------------------------------------------
+# Commands
+#-----------------------------------------------------------------------------
+
+cmd_version() {
+    gut_print "${CHEF} gut v${GUT_VERSION}"
+    gut_print "AI-native development workflow"
+}
+
+cmd_help() {
+    echo ""
+    gut_print "  🧑‍🍳 gut - $(t help_title)"
+    echo ""
+    gut_print "  \"$(t help_tagline)\""
+    echo ""
+
+    if [[ "$GUT_LANG_CODE" == "pt" ]]; then
+        cat << 'EOF'
+  FLUXO DE TRABALHO (Modo Planejado):
+
+    gut recipe <nome>     📝  Defina o que você está fazendo (a spec)
+    gut recipe -a <nome>  📝  Criação guiada de receita (modo assistido)
+    gut prep <receita>    🥗  Planeje a abordagem (IA ajuda aqui)
+    gut prep -a <receita> 🥗  Criação guiada do plano (modo assistido)
+    gut cook <receita>    🍳  Faça o trabalho (cria/anexa ao branch)
+    gut taste <receita>   👅  Teste (verificação)
+    gut serve             🍽️  Entregue todas as receitas do branch
+
+  GERENCIAMENTO DE BRANCHES:
+
+    gut branch            🌿  Mostrar branch atual e receitas vinculadas
+    gut branch list       Listar todos os branches gut
+    gut branch create     Criar um novo branch gut
+    gut attach <receita>  Vincular receita ao branch atual
+    gut detach <receita>  Desvincular receita do branch
+    gut combine           Visualizar o que será entregue junto
+
+  MODO REATIVO (Correções rápidas):
+
+    gut season <msg>      🧂  Ajuste rápido (enquanto cozinha)
+    gut flame [msg]       🔥  Algo pegando fogo! Correção emergencial
+    gut doctor            🩺  Verificar saúde do ambiente
+
+  GERENCIAMENTO DA COZINHA:
+
+    gut init              Configurar a cozinha no repo atual
+    gut menu              Listar todas as receitas e seus status
+    gut pantry            Gerenciar contexto do projeto (IA lê isso)
+    gut status            Onde estamos? O que está cozinhando?
+    gut resume            Continue de onde parou (handoff de IA)
+    gut resume --json     Saída estruturada para agentes de IA
+    gut questions         Listar perguntas em aberto
+    gut answer            Responder uma pergunta
+    gut step              Gerenciar passos do plano
+    gut context           Exportar contexto para IA (clipboard)
+    gut spoiled           Encontrar receitas abandonadas
+
+  MODOS DE IA:
+
+    Planejado (recipe/cook) → Contexto completo, seguir plano, detalhado
+    Reativo (season)        → Contexto mínimo, correção cirúrgica, rápido
+    Emergência (flame)      → Corrija AGORA, pule o não essencial
+
+  INÍCIO RÁPIDO:
+
+    $ gut init                        # configurar cozinha
+    $ gut recipe "adicionar auth"     # definir o que construir
+    $ gut cook adicionar-auth         # cria branch, começa a cozinhar
+    $ gut recipe "adicionar 2fa"      # outra receita
+    $ gut attach adicionar-2fa        # vincular ao mesmo branch
+    $ gut season "corrigir porta"     # ajuste rápido
+    $ gut combine                     # ver o que será entregue
+    $ gut serve                       # entregar receitas do branch!
+
+  Idioma: GUT_LANG=en para inglês, GUT_LANG=pt para português
+
+  Saiba mais: https://github.com/anthropics/gut-cli
+
+EOF
+    else
+        cat << 'EOF'
+  THE WORKFLOW (Planned Mode):
+
+    gut recipe <name>     📝  Define what you're making (the spec)
+    gut recipe -a <name>  📝  Guided recipe creation (assisted mode)
+    gut prep <recipe>     🥗  Plan the approach (AI helps here)
+    gut prep -a <recipe>  🥗  Guided plan creation (assisted mode)
+    gut cook <recipe>     🍳  Do the work (creates/attaches to branch)
+    gut taste <recipe>    👅  Test it (verification)
+    gut serve             🍽️  Ship all recipes on current branch
+
+  BRANCH MANAGEMENT:
+
+    gut branch            🌿  Show current branch and linked recipes
+    gut branch list       List all gut branches
+    gut branch create     Create a new gut branch
+    gut attach <recipe>   Link recipe to current branch
+    gut detach <recipe>   Unlink recipe from branch
+    gut combine           Preview what will be served together
+
+  REACTIVE MODE (Quick fixes):
+
+    gut season <msg>      🧂  Quick adjustment (while cooking)
+    gut flame [msg]       🔥  Something's burning! Emergency fix
+    gut doctor            🩺  Check environment health
+
+  KITCHEN MANAGEMENT:
+
+    gut init              Set up the kitchen in current repo
+    gut menu              List all recipes and their status
+    gut pantry            Manage project context (AI reads this)
+    gut status            Where are we? What's cooking?
+    gut resume            Pick up where you left off (for AI handoff)
+    gut resume --json     Structured output for AI agents
+    gut questions         List open questions
+    gut answer            Answer a question
+    gut step              Manage plan steps
+    gut context           Dump all context for AI (clipboard)
+    gut spoiled           Find stale/abandoned recipes
+
+  AI MODES:
+
+    Planned (recipe/cook)   → Full context, follow the plan, thorough
+    Reactive (season)       → Minimal context, surgical fix, fast
+    Emergency (flame)       → Fix it NOW, skip nice-to-haves
+
+  QUICK START:
+
+    $ gut init                        # set up kitchen
+    $ gut recipe "add user auth"      # define what to build
+    $ gut cook add-user-auth          # creates branch, starts cooking
+    $ gut recipe "add 2fa"            # another recipe
+    $ gut attach add-2fa              # link to same branch
+    $ gut season "fix port to 3001"   # quick adjustment
+    $ gut combine                     # preview what ships together
+    $ gut serve                       # ship all recipes on branch!
+
+  Language: GUT_LANG=en for English, GUT_LANG=pt for Portuguese
+
+  Learn more: https://github.com/anthropics/gut-cli
+
+EOF
+    fi
+}
+
+cmd_init() {
+    gut_header "${CHEF} $(t setting_up)"
+
+    # Check if git is initialized
+    if ! is_git_repo; then
+        gut_print "📁 No git repository detected."
+        gut_print ""
+        read -p "Initialize git repository? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            git init
+            gut_success "Git repository initialized!"
+            gut_print ""
+
+            # Create .gitignore if it doesn't exist
+            if [[ ! -f ".gitignore" ]]; then
+                cat > ".gitignore" << 'GITIGNORE'
+# Dependencies
+node_modules/
+vendor/
+.venv/
+__pycache__/
+
+# Build outputs
+dist/
+build/
+*.o
+*.pyc
+
+# Environment
+.env
+.env.local
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# gut workflow
+.gut/prep/drafts/
+GITIGNORE
+                gut_success "Created .gitignore"
+            fi
+        else
+            gut_warn "Skipping git init. Some gut features require git."
+            gut_print ""
+        fi
+    else
+        gut_print "✓ Git repository detected"
+        gut_print ""
+    fi
+
+    if [[ -d "$GUT_DIR" ]]; then
+        gut_warn "$(t kitchen_exists) $GUT_DIR"
+        return 0
+    fi
+
+    # Create directory structure
+    mkdir -p "$GUT_PANTRY"
+    mkdir -p "$GUT_RECIPES"
+    mkdir -p "$GUT_PREP"
+    mkdir -p "$GUT_PLATED"
+    mkdir -p "$GUT_SEASONING"
+    mkdir -p "$GUT_FLAME"
+    mkdir -p "$GUT_MODES"
+
+    # Create pantry context file
+    cat > "$GUT_PANTRY/context.md" << 'EOF'
+# Project Context
+
+> This file helps AI understand your project. Keep it updated!
+
+## What is this project?
+
+[Describe your project in 2-3 sentences]
+
+## Tech Stack
+
+- Language:
+- Framework:
+- Database:
+- Other:
+
+## Architecture Overview
+
+[Describe the high-level architecture]
+
+## Key Conventions
+
+- Naming:
+- File structure:
+- Testing approach:
+- Error handling:
+
+## Important Files
+
+- Entry point:
+- Config:
+- Tests:
+
+## Current State
+
+[What's working? What's in progress?]
+
+## Out of Scope / Don't Touch
+
+[Things AI should NOT modify]
+EOF
+
+    # Create conventions file
+    cat > "$GUT_PANTRY/conventions.md" << 'EOF'
+# Coding Conventions
+
+## Style
+
+[Your code style preferences]
+
+## Patterns We Use
+
+[Common patterns in this codebase]
+
+## Patterns We Avoid
+
+[Anti-patterns, things not to do]
+
+## Dependencies
+
+[How we handle dependencies, what's approved]
+EOF
+
+    # Create mode instruction files
+    cat > "$GUT_MODES/planned.md" << 'EOF'
+## Mode: PLANNED
+
+You are implementing a recipe. Follow the prep plan thoroughly.
+
+### Behavior
+- Read ALL context before starting (pantry + recipe + prep)
+- Implement step by step per the plan
+- Ask if requirements are unclear
+- Write tests for new functionality
+- Make clean, logical commits with descriptive messages
+- Update recipe status as you progress
+- Consider edge cases and error handling
+- Follow project conventions strictly
+
+### Commits
+- Format: `feat: <description>` or `fix: <description>`
+- Reference the recipe in commit body
+
+### When stuck
+- Re-read the recipe requirements
+- Check the prep plan for guidance
+- Ask for clarification rather than guessing
+EOF
+
+    cat > "$GUT_MODES/reactive.md" << 'EOF'
+## Mode: REACTIVE
+
+Quick fix. Be surgical. Get in, fix it, get out.
+
+### Behavior
+- Minimal changes ONLY
+- Don't refactor surrounding code
+- Don't add features or "improvements"
+- Don't write new tests (just run existing ones)
+- Don't update documentation
+- Focus on the ONE thing that needs fixing
+
+### Commits
+- Format: `fix: <what you fixed>`
+- Keep it short and specific
+
+### What NOT to do
+- Don't explore the codebase extensively
+- Don't suggest improvements
+- Don't add error handling beyond the fix
+- Don't change code style or formatting
+EOF
+
+    cat > "$GUT_MODES/emergency.md" << 'EOF'
+## Mode: EMERGENCY
+
+Something's broken in production or blocking work. Fix it NOW.
+
+### Behavior
+- Diagnose first: what exactly broke?
+- Smallest possible fix to restore functionality
+- Skip nice-to-haves entirely
+- Can bend conventions if absolutely needed
+- Log what you find for later review
+- Speed over perfection
+
+### Commits
+- Format: `hotfix: <what>`
+- Add context about what was broken
+
+### After the fix
+- Note any technical debt created
+- Flag for proper fix later if needed
+- Document the root cause if known
+EOF
+
+    # Create health check config
+    cat > "$GUT_PANTRY/health.yml" << 'EOF'
+# Environment Health Configuration
+# Used by `gut doctor` to verify your setup
+
+# ports:
+#   - 3000: "frontend dev server"
+#   - 3001: "api server"
+#   - 5432: "postgres"
+
+# env:
+#   required:
+#     - DATABASE_URL
+#     - API_KEY
+#   optional:
+#     - DEBUG
+#     - LOG_LEVEL
+
+# services:
+#   - postgres
+#   - redis
+
+# commands:
+#   - name: "node"
+#     check: "node --version"
+#   - name: "npm"
+#     check: "npm --version"
+EOF
+
+    # Create .gitignore additions
+    if [[ -f ".gitignore" ]]; then
+        if ! grep -q ".gut/prep" .gitignore 2>/dev/null; then
+            echo -e "\n# gut - AI workflow\n.gut/prep/drafts/" >> .gitignore
+        fi
+    fi
+
+    gut_success "$(t kitchen_initialized)"
+    echo ""
+    gut_print "  ${PANTRY} Pantry:    $GUT_PANTRY/ (project context)"
+    gut_print "  ${RECIPE} Recipes:   $GUT_RECIPES/ (your specs)"
+    gut_print "  ${PREP} Prep:      $GUT_PREP/ (AI plans)"
+    gut_print "  ${SEASON} Seasoning: $GUT_SEASONING/ (quick fixes log)"
+    gut_print "  ${FLAME} Flame:     $GUT_FLAME/ (emergency fixes)"
+    gut_print "  ${SERVE} Plated:    $GUT_PLATED/ (completed work)"
+    echo ""
+
+    # Offer initial commit if git is set up and no commits yet
+    if is_git_repo; then
+        local has_commits=$(git rev-parse HEAD 2>/dev/null && echo "yes" || echo "no")
+        if [[ "$has_commits" == "no" ]]; then
+            read -p "Create initial commit? [Y/n] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+                git add .
+                git commit -m "chore: initialize project with gut workflow
+
+Sets up gut kitchen for AI-native development.
+
+Co-Authored-By: gut-cli <noreply@gut-cli.dev>"
+                gut_success "Initial commit created!"
+                echo ""
+            fi
+        fi
+    fi
+
+    gut_print "${BOLD}━━━ Next ━━━${NC}"
+    gut_print ""
+    gut_print "  1. Add project context:"
+    gut_print "     ${CYAN}$EDITOR $GUT_PANTRY/context.md${NC}"
+    gut_print ""
+    gut_print "  2. Create your first recipe:"
+    gut_print "     ${CYAN}gut recipe -a \"your feature\"${NC}"
+    echo ""
+}
+
+cmd_recipe() {
+    gut_check_init
+
+    local name=""
+    local assisted=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --assisted|-a)
+                assisted=true
+                shift
+                ;;
+            *)
+                name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        # List recipes
+        gut_header "${RECIPE} Recipes"
+
+        if [[ -z "$(ls -A $GUT_RECIPES 2>/dev/null)" ]]; then
+            gut_print "No recipes yet."
+            gut_print ""
+            gut_print "Create one:"
+            gut_print "  ${CYAN}gut recipe \"feature name\"${NC}        - blank template"
+            gut_print "  ${CYAN}gut recipe -a \"feature name\"${NC}     - assisted mode (guided)"
+            return 0
+        fi
+
+        for recipe in "$GUT_RECIPES"/*.md; do
+            [[ -f "$recipe" ]] || continue
+            local basename=$(basename "$recipe" .md)
+            local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2 || echo "draft")
+            local title=$(grep -m1 "^# " "$recipe" 2>/dev/null | sed 's/^# //' || echo "$basename")
+
+            case "$status" in
+                draft)    gut_print "  ${YELLOW}○${NC} $basename - $title" ;;
+                prepped)  gut_print "  ${BLUE}◐${NC} $basename - $title" ;;
+                cooking)  gut_print "  ${MAGENTA}◑${NC} $basename - $title" ;;
+                tasting)  gut_print "  ${CYAN}◕${NC} $basename - $title" ;;
+                served)   gut_print "  ${GREEN}●${NC} $basename - $title" ;;
+                spoiled)  gut_print "  ${RED}✗${NC} $basename - $title" ;;
+                *)        gut_print "  ○ $basename - $title" ;;
+            esac
+        done
+        return 0
+    fi
+
+    # Create new recipe
+    local slug=$(slugify "$name")
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    if [[ -f "$recipe_file" ]]; then
+        gut_warn "Recipe '$slug' already exists"
+        gut_print "Edit it: ${CYAN}$recipe_file${NC}"
+        return 1
+    fi
+
+    if [[ "$assisted" == true ]]; then
+        # Assisted mode - guided prompts
+        gut_header "${RECIPE} Recipe Assistant: $name"
+        gut_print "I'll help you define this recipe. Press Enter to skip any field."
+        gut_print ""
+
+        # What
+        gut_print "${BOLD}What are we building?${NC}"
+        gut_print "${CYAN}Be specific about the feature/fix.${NC}"
+        echo -n "> "
+        read -r input_what
+        [[ -z "$input_what" ]] && input_what="[What are we building? Be specific.]"
+
+        # Why
+        echo ""
+        gut_print "${BOLD}Why does this matter?${NC}"
+        gut_print "${CYAN}What problem does it solve? Who benefits?${NC}"
+        echo -n "> "
+        read -r input_why
+        [[ -z "$input_why" ]] && input_why="[Why does this matter? What problem does it solve?]"
+
+        # Success Criteria
+        echo ""
+        gut_print "${BOLD}Success criteria?${NC}"
+        gut_print "${CYAN}How do we know it's done? (comma-separated or one per line, empty line to finish)${NC}"
+        local criteria=()
+        while true; do
+            echo -n "> "
+            read -r input_criterion
+            [[ -z "$input_criterion" ]] && break
+            # Split by comma if present
+            IFS=',' read -ra parts <<< "$input_criterion"
+            for part in "${parts[@]}"; do
+                part=$(echo "$part" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                [[ -n "$part" ]] && criteria+=("$part")
+            done
+        done
+
+        # Constraints
+        echo ""
+        gut_print "${BOLD}Any constraints?${NC}"
+        gut_print "${CYAN}Technical limitations, compatibility requirements, etc.${NC}"
+        echo -n "> "
+        read -r input_constraints
+        [[ -z "$input_constraints" ]] && input_constraints="None specified."
+
+        # Out of Scope
+        echo ""
+        gut_print "${BOLD}What's out of scope?${NC}"
+        gut_print "${CYAN}What are we explicitly NOT doing?${NC}"
+        echo -n "> "
+        read -r input_out_of_scope
+        [[ -z "$input_out_of_scope" ]] && input_out_of_scope="[To be determined]"
+
+        # Build criteria list
+        local criteria_text=""
+        if [[ ${#criteria[@]} -gt 0 ]]; then
+            for c in "${criteria[@]}"; do
+                criteria_text+="- [ ] $c"$'\n'
+            done
+        else
+            criteria_text="- [ ] [Define success criteria]"$'\n'
+        fi
+
+        # Write the recipe
+        cat > "$recipe_file" << EOF
+# $name
+
+---
+status: draft
+created: $(timestamp)
+author: $(git config user.name 2>/dev/null || echo "$USER")
+---
+
+## What
+
+$input_what
+
+## Why
+
+$input_why
+
+## Success Criteria
+
+$criteria_text
+## Context
+
+[Any relevant background, links, or references]
+
+## Constraints
+
+$input_constraints
+
+## Out of Scope
+
+$input_out_of_scope
+
+## Open Questions
+
+- [Anything unclear that needs answering?]
+EOF
+
+        gut_print ""
+        gut_success "Recipe created: $slug"
+        gut_print ""
+        gut_print "Preview:"
+        gut_print "${CYAN}─────────────────────────────────${NC}"
+        gut_print "${BOLD}What:${NC} $input_what"
+        gut_print "${BOLD}Why:${NC} $input_why"
+        if [[ ${#criteria[@]} -gt 0 ]]; then
+            gut_print "${BOLD}Criteria:${NC}"
+            for c in "${criteria[@]}"; do
+                gut_print "  • $c"
+            done
+        fi
+        gut_print "${CYAN}─────────────────────────────────${NC}"
+        gut_print ""
+        gut_print "Recipe: ${CYAN}$recipe_file${NC}"
+        gut_print ""
+        gut_print "${BOLD}━━━ Next ━━━${NC}"
+        gut_print "  ${CYAN}gut prep $slug${NC}      - create implementation plan"
+        gut_print "  ${CYAN}gut cook $slug${NC}     - skip prep, start coding"
+        echo ""
+
+    else
+        # Standard mode - blank template
+        cat > "$recipe_file" << EOF
+# $name
+
+---
+status: draft
+created: $(timestamp)
+author: $(git config user.name 2>/dev/null || echo "$USER")
+---
+
+## What
+
+[What are we building? Be specific.]
+
+## Why
+
+[Why does this matter? What problem does it solve?]
+
+## Success Criteria
+
+- [ ] [How do we know it's done?]
+- [ ] [What should work when complete?]
+- [ ] [Any specific requirements?]
+
+## Context
+
+[Any relevant background, links, or references]
+
+## Constraints
+
+[Technical constraints, compatibility requirements, etc.]
+
+## Out of Scope
+
+[What are we NOT doing in this recipe?]
+
+## Open Questions
+
+- [Anything unclear that needs answering?]
+EOF
+
+        gut_success "Recipe created: $slug"
+        gut_print ""
+        gut_print "Recipe: ${CYAN}$recipe_file${NC}"
+
+        # Open in editor if available
+        if [[ -n "$EDITOR" ]]; then
+            read -p "Open in editor? [Y/n] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+                $EDITOR "$recipe_file"
+            fi
+        fi
+
+        gut_print ""
+        gut_print "${BOLD}━━━ Next ━━━${NC}"
+        gut_print "  ${CYAN}gut prep $slug${NC}      - create implementation plan"
+        gut_print "  ${CYAN}gut cook $slug${NC}     - skip prep, start coding"
+        gut_print ""
+        gut_print "${YELLOW}💡${NC} Try ${CYAN}gut recipe -a \"name\"${NC} for guided creation"
+        echo ""
+    fi
+}
+
+cmd_prep() {
+    gut_check_init
+
+    local slug=""
+    local assisted=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --assisted|-a)
+                assisted=true
+                shift
+                ;;
+            *)
+                slug="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut prep <recipe-name> [--assisted|-a]"
+    fi
+
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found. Run 'gut menu' to see recipes."
+    fi
+
+    local prep_file="$GUT_PREP/${slug}.md"
+
+    gut_header "${PREP} Prepping: $slug"
+
+    # Read project context
+    local context=""
+    if [[ -f "$GUT_PANTRY/context.md" ]]; then
+        context=$(cat "$GUT_PANTRY/context.md")
+    fi
+
+    local conventions=""
+    if [[ -f "$GUT_PANTRY/conventions.md" ]]; then
+        conventions=$(cat "$GUT_PANTRY/conventions.md")
+    fi
+
+    local recipe=$(cat "$recipe_file")
+
+    # Create prep file with AI prompt
+    cat > "$prep_file" << EOF
+# Prep: $slug
+
+---
+status: prepping
+recipe: $slug
+created: $(timestamp)
+---
+
+## Recipe
+
+$recipe
+
+---
+
+## Project Context
+
+$context
+
+---
+
+## Conventions
+
+$conventions
+
+---
+
+## Implementation Plan
+
+> 🤖 AI: Fill this section with your implementation plan
+
+### Approach
+
+[High-level approach]
+
+### Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| | | |
+
+### Step-by-Step
+
+1. [ ] Step one
+2. [ ] Step two
+3. [ ] ...
+
+### Dependencies Needed
+
+[Any new dependencies?]
+
+### Risks & Considerations
+
+[What could go wrong? Edge cases?]
+
+### Testing Strategy
+
+[How will we verify this works?]
+
+---
+
+## AI Instructions
+
+When implementing this recipe:
+
+1. Read the full recipe and prep plan above
+2. Follow the project conventions in the pantry
+3. Implement step by step, committing logical chunks
+4. Update the recipe status as you progress
+5. Run tests before marking as complete
+
+To start cooking: \`gut cook $slug\`
+EOF
+
+    # Update recipe status
+    sed -i.bak 's/^status: draft/status: prepped/' "$recipe_file" && rm -f "${recipe_file}.bak"
+
+    if [[ "$assisted" == true ]]; then
+        # Assisted mode - guide through implementation plan
+        gut_print ""
+        gut_print "Let's build your implementation plan."
+        gut_print ""
+
+        # Approach
+        gut_print "${BOLD}High-level approach?${NC}"
+        gut_print "${CYAN}How will you tackle this? (1-2 sentences)${NC}"
+        echo -n "> "
+        read -r input_approach
+        [[ -z "$input_approach" ]] && input_approach="[To be determined]"
+
+        # Files to modify
+        echo ""
+        gut_print "${BOLD}Files to create/modify?${NC}"
+        gut_print "${CYAN}List file paths (one per line, empty line to finish)${NC}"
+        local files=()
+        while true; do
+            echo -n "> "
+            read -r input_file
+            [[ -z "$input_file" ]] && break
+            files+=("$input_file")
+        done
+
+        # Steps
+        echo ""
+        gut_print "${BOLD}Implementation steps?${NC}"
+        gut_print "${CYAN}What are the steps? (one per line, empty line to finish)${NC}"
+        local steps=()
+        while true; do
+            echo -n "> "
+            read -r input_step
+            [[ -z "$input_step" ]] && break
+            steps+=("$input_step")
+        done
+
+        # Dependencies
+        echo ""
+        gut_print "${BOLD}New dependencies needed?${NC}"
+        gut_print "${CYAN}Any packages to install? (comma-separated or 'none')${NC}"
+        echo -n "> "
+        read -r input_deps
+        [[ -z "$input_deps" ]] && input_deps="None"
+
+        # Risks
+        echo ""
+        gut_print "${BOLD}Risks or edge cases?${NC}"
+        gut_print "${CYAN}What could go wrong?${NC}"
+        echo -n "> "
+        read -r input_risks
+        [[ -z "$input_risks" ]] && input_risks="[To be considered]"
+
+        # Build files table
+        local files_table=""
+        if [[ ${#files[@]} -gt 0 ]]; then
+            for f in "${files[@]}"; do
+                files_table+="| $f | modify | |"$'\n'
+            done
+        else
+            files_table="| | | |"
+        fi
+
+        # Build steps list
+        local steps_list=""
+        local step_num=1
+        if [[ ${#steps[@]} -gt 0 ]]; then
+            for s in "${steps[@]}"; do
+                steps_list+="$step_num. [ ] $s"$'\n'
+                ((step_num++))
+            done
+        else
+            steps_list="1. [ ] [Define steps]"
+        fi
+
+        # Rewrite prep file with filled content
+        cat > "$prep_file" << EOF
+# Prep: $slug
+
+---
+status: prepping
+recipe: $slug
+created: $(timestamp)
+---
+
+## Recipe
+
+$recipe
+
+---
+
+## Project Context
+
+$context
+
+---
+
+## Conventions
+
+$conventions
+
+---
+
+## Implementation Plan
+
+### Approach
+
+$input_approach
+
+### Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+$files_table
+### Step-by-Step
+
+$steps_list
+### Dependencies Needed
+
+$input_deps
+
+### Risks & Considerations
+
+$input_risks
+
+### Testing Strategy
+
+[How will we verify this works?]
+
+---
+
+## AI Instructions
+
+When implementing this recipe:
+
+1. Read the full recipe and prep plan above
+2. Follow the project conventions in the pantry
+3. Implement step by step, committing logical chunks
+4. Update the recipe status as you progress
+5. Run tests before marking as complete
+
+To start cooking: \`gut cook $slug\`
+EOF
+
+        gut_print ""
+        gut_success "Prep file created with your plan!"
+        gut_print ""
+        gut_print "Preview:"
+        gut_print "${CYAN}─────────────────────────────────${NC}"
+        gut_print "${BOLD}Approach:${NC} $input_approach"
+        if [[ ${#steps[@]} -gt 0 ]]; then
+            gut_print "${BOLD}Steps:${NC}"
+            for s in "${steps[@]}"; do
+                gut_print "  • $s"
+            done
+        fi
+        gut_print "${CYAN}─────────────────────────────────${NC}"
+        gut_print ""
+        gut_print "Prep: ${CYAN}$prep_file${NC}"
+        gut_print ""
+        gut_print "${BOLD}━━━ Next ━━━${NC}"
+        gut_print "  ${CYAN}gut cook $slug${NC}     - start implementing"
+        echo ""
+
+    else
+        gut_success "Prep file created!"
+        gut_print ""
+        gut_print "The prep file contains:"
+        gut_print "  • Your recipe + project context"
+        gut_print "  • Template for implementation plan"
+        gut_print ""
+        gut_print "Prep: ${CYAN}$prep_file${NC}"
+        gut_print ""
+        gut_print "${BOLD}━━━ Next ━━━${NC}"
+        gut_print "  1. Share prep file with AI to fill the plan"
+        gut_print "  2. ${CYAN}gut cook $slug${NC}  - start implementing"
+        gut_print ""
+        gut_print "${YELLOW}💡${NC} Try ${CYAN}gut prep -a $slug${NC} for guided plan creation"
+    fi
+    echo ""
+}
+
+cmd_cook() {
+    gut_check_init
+
+    local slug=""
+    local target_branch=""
+    local new_branch=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --branch|-b)
+                target_branch="$2"
+                shift 2
+                ;;
+            --new|-n)
+                new_branch=true
+                shift
+                ;;
+            *)
+                slug="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut cook <recipe-name> [--branch <name>] [--new]"
+    fi
+
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+    local prep_file="$GUT_PREP/${slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found."
+    fi
+
+    gut_header "${COOK} Cooking: $slug"
+
+    # Update status
+    sed -i.bak 's/^status: prepped/status: cooking/' "$recipe_file" && rm -f "${recipe_file}.bak"
+    sed -i.bak 's/^status: draft/status: cooking/' "$recipe_file" && rm -f "${recipe_file}.bak"
+
+    if is_git_repo; then
+        local current_branch=$(get_current_branch)
+        local branch=""
+
+        if [[ -n "$target_branch" ]]; then
+            # Explicit branch specified
+            branch="$target_branch"
+        elif [[ "$new_branch" == true ]]; then
+            # Force new branch
+            branch="gut/${slug}"
+        elif [[ "$current_branch" == gut/* ]] && [[ "$new_branch" != true ]]; then
+            # Already on a gut branch, attach to it
+            branch="$current_branch"
+            gut_print "Attaching to current branch: ${CYAN}$branch${NC}"
+        else
+            # Create new branch
+            branch="gut/${slug}"
+        fi
+
+        # Switch or create branch
+        if [[ "$branch" != "$current_branch" ]]; then
+            if git show-ref --verify --quiet "refs/heads/$branch"; then
+                gut_print "Switching to existing branch: $branch"
+                git checkout "$branch"
+            else
+                gut_print "Creating branch: $branch"
+                git checkout -b "$branch"
+            fi
+        fi
+
+        # Link recipe to branch
+        set_recipe_branch "$recipe_file" "$branch"
+
+        # Show other recipes on this branch
+        local other_recipes=$(get_branch_recipes "$branch")
+        local recipe_count=$(echo "$other_recipes" | wc -w | tr -d ' ')
+
+        if [[ "$recipe_count" -gt 1 ]]; then
+            gut_print ""
+            gut_print "${BOLD}Recipes on this branch:${NC}"
+            for r in $other_recipes; do
+                if [[ "$r" == "$slug" ]]; then
+                    gut_print "  ${COOK} $r (this one)"
+                else
+                    gut_print "  📝 $r"
+                fi
+            done
+        fi
+    else
+        gut_warn "Not a git repo, skipping branch management"
+    fi
+
+    gut_success "Kitchen is hot! Time to cook."
+    gut_print ""
+    gut_print "${BOLD}Cooking:${NC} $slug"
+    gut_print ""
+    gut_print "Reference files:"
+    gut_print "  Recipe: ${CYAN}$recipe_file${NC}"
+    [[ -f "$prep_file" ]] && gut_print "  Prep:   ${CYAN}$prep_file${NC}"
+    gut_print ""
+    gut_print "${BOLD}━━━ While cooking ━━━${NC}"
+    gut_print "  ${CYAN}gut season \"fix X\"${NC}   - log quick adjustment"
+    gut_print "  ${CYAN}gut step done $slug 0${NC} - mark step complete"
+    gut_print "  ${CYAN}gut attach <recipe>${NC}  - add recipe to branch"
+    gut_print ""
+    gut_print "${BOLD}━━━ Next ━━━${NC}"
+    gut_print "  ${CYAN}gut taste $slug${NC}      - verify when done"
+    echo ""
+}
+
+cmd_taste() {
+    gut_check_init
+
+    local slug="$1"
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut taste <recipe-name>"
+    fi
+
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found."
+    fi
+
+    gut_header "${TASTE} Tasting: $slug"
+
+    # Update status
+    sed -i.bak 's/^status: cooking/status: tasting/' "$recipe_file" && rm -f "${recipe_file}.bak"
+
+    gut_print "Verification checklist:"
+    gut_print ""
+
+    # Extract success criteria from recipe
+    if grep -q "## Success Criteria" "$recipe_file"; then
+        gut_print "${BOLD}From your recipe:${NC}"
+        sed -n '/## Success Criteria/,/## /p' "$recipe_file" | grep -E "^\s*-\s*\[" | head -10
+        gut_print ""
+    fi
+
+    gut_print "${BOLD}Standard checks:${NC}"
+    gut_print "  [ ] Code compiles/runs without errors"
+    gut_print "  [ ] Tests pass"
+    gut_print "  [ ] Matches the recipe requirements"
+    gut_print "  [ ] No obvious bugs or edge cases"
+    gut_print "  [ ] Code follows project conventions"
+    gut_print ""
+
+    # Run tests if available
+    if [[ -f "package.json" ]] && grep -q '"test"' package.json; then
+        read -p "Run npm test? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            npm test
+        fi
+    elif [[ -f "Makefile" ]] && grep -q "^test:" Makefile; then
+        read -p "Run make test? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            make test
+        fi
+    elif [[ -f "pytest.ini" ]] || [[ -f "setup.py" ]]; then
+        read -p "Run pytest? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            pytest
+        fi
+    fi
+
+    gut_print ""
+    gut_print "${BOLD}━━━ Next ━━━${NC}"
+    gut_print "  ${GREEN}All good?${NC}  ${CYAN}gut serve${NC}       - ship it!"
+    gut_print "  ${YELLOW}Need fixes?${NC} ${CYAN}gut cook $slug${NC} - back to cooking"
+    echo ""
+}
+
+cmd_serve() {
+    gut_check_init
+
+    local slug="$1"
+    local current_branch=$(get_current_branch)
+    local recipes_to_serve=()
+
+    # If no slug provided, serve all recipes on current branch
+    if [[ -z "$slug" ]]; then
+        if ! is_git_repo; then
+            gut_error "Usage: gut serve <recipe-name>"
+        fi
+
+        # Get all active recipes on this branch
+        local branch_recipes=$(get_active_branch_recipes)
+
+        if [[ -z "$branch_recipes" ]]; then
+            gut_error "No active recipes on branch '$current_branch'. Specify a recipe: gut serve <recipe-name>"
+        fi
+
+        for r in $branch_recipes; do
+            recipes_to_serve+=("$r")
+        done
+    else
+        recipes_to_serve+=("$slug")
+    fi
+
+    gut_header "${SERVE} Serving from: $current_branch"
+
+    # Collect info from all recipes
+    local titles=()
+    local pr_body="## Recipes\n\n"
+    local commit_recipes=""
+
+    for recipe_slug in "${recipes_to_serve[@]}"; do
+        local recipe_file="$GUT_RECIPES/${recipe_slug}.md"
+
+        if [[ ! -f "$recipe_file" ]]; then
+            gut_error "Recipe '$recipe_slug' not found."
+        fi
+
+        local title=$(grep -m1 "^# " "$recipe_file" | sed 's/^# //')
+        local what=$(sed -n '/## What/,/## /p' "$recipe_file" | grep -v "^##" | head -5)
+        local why=$(sed -n '/## Why/,/## /p' "$recipe_file" | grep -v "^##" | head -5)
+
+        titles+=("$title")
+        commit_recipes+="$recipe_slug, "
+
+        pr_body+="### $title\n\n"
+        pr_body+="**What:** $what\n\n"
+        pr_body+="**Why:** $why\n\n"
+        pr_body+="---\n\n"
+
+        gut_print "  ${RECIPE} $recipe_slug: $title"
+    done
+
+    # Create combined PR title
+    local pr_title=""
+    if [[ ${#titles[@]} -eq 1 ]]; then
+        pr_title="${titles[0]}"
+    else
+        pr_title="$(IFS=', '; echo "${titles[*]}")"
+        # Truncate if too long
+        if [[ ${#pr_title} -gt 70 ]]; then
+            pr_title="${titles[0]} + $((${#titles[@]} - 1)) more"
+        fi
+    fi
+
+    pr_body+="\n🧑‍🍳 Cooked with [gut](https://github.com/anthropics/gut-cli)"
+
+    gut_print ""
+    gut_print "Ready to serve: ${BOLD}$pr_title${NC}"
+    gut_print ""
+
+    if is_git_repo; then
+        local default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+
+        gut_print "Branch: $current_branch → $default_branch"
+        gut_print ""
+
+        # Check for uncommitted changes
+        if [[ -n $(git status --porcelain) ]]; then
+            gut_warn "You have uncommitted changes!"
+            git status --short
+            gut_print ""
+            read -p "Commit them now? [Y/n] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+                git add -A
+                git commit -m "feat: $pr_title
+
+Implements recipes: ${commit_recipes%, }"
+            fi
+        fi
+
+        # Push and create PR
+        read -p "Push and create PR? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            git push -u origin "$current_branch"
+
+            if command -v gh &> /dev/null; then
+                echo -e "$pr_body" | gh pr create --title "$pr_title" --body-file -
+                gut_success "PR created!"
+            else
+                gut_warn "GitHub CLI (gh) not found. Create PR manually."
+                gut_print "Push complete. Create PR at your repo's GitHub page."
+            fi
+        fi
+    else
+        gut_warn "Not a git repo. Skipping PR creation."
+    fi
+
+    # Update status and move to plated for all recipes
+    for recipe_slug in "${recipes_to_serve[@]}"; do
+        local recipe_file="$GUT_RECIPES/${recipe_slug}.md"
+        sed -i.bak 's/^status: [a-z]*/status: served/' "$recipe_file" && rm -f "${recipe_file}.bak"
+
+        # Copy to plated for history
+        local plated_file="$GUT_PLATED/$(datestamp)-${recipe_slug}.md"
+        cp "$recipe_file" "$plated_file"
+    done
+
+    gut_success "Recipes served! ${FIRE}"
+    gut_print ""
+    gut_print "Plated ${#recipes_to_serve[@]} recipe(s) to: ${CYAN}$GUT_PLATED/${NC}"
+    gut_print ""
+    gut_print "${BOLD}━━━ Next ━━━${NC}"
+    gut_print "  ${CYAN}git checkout main${NC}          - return to main branch"
+    gut_print "  ${CYAN}gut recipe -a \"next feature\"${NC} - start something new"
+    echo ""
+}
+
+cmd_menu() {
+    gut_check_init
+
+    gut_header "${CHEF} Menu"
+
+    local draft=0 prepped=0 cooking=0 tasting=0 served=0
+
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2 || echo "draft")
+        case "$status" in
+            draft)   ((draft++)) ;;
+            prepped) ((prepped++)) ;;
+            cooking) ((cooking++)) ;;
+            tasting) ((tasting++)) ;;
+            served)  ((served++)) ;;
+        esac
+    done
+
+    gut_print "  ${YELLOW}○ Draft${NC}    $draft"
+    gut_print "  ${BLUE}◐ Prepped${NC}  $prepped"
+    gut_print "  ${MAGENTA}◑ Cooking${NC}  $cooking"
+    gut_print "  ${CYAN}◕ Tasting${NC}  $tasting"
+    gut_print "  ${GREEN}● Served${NC}   $served"
+    gut_print ""
+
+    cmd_recipe  # List recipes
+}
+
+cmd_pantry() {
+    gut_check_init
+
+    local action="$1"
+
+    gut_header "${PANTRY} Pantry"
+
+    case "$action" in
+        ""|list)
+            gut_print "Your pantry contains project context for AI assistants."
+            gut_print ""
+            gut_print "Files:"
+            for f in "$GUT_PANTRY"/*; do
+                [[ -f "$f" ]] && gut_print "  • $(basename "$f")"
+            done
+            gut_print ""
+            gut_print "Commands:"
+            gut_print "  gut pantry edit      Edit context.md"
+            gut_print "  gut pantry add       Add a new context file"
+            gut_print "  gut pantry show      Display all context"
+            ;;
+        edit)
+            local file="${2:-context.md}"
+            if [[ -n "$EDITOR" ]]; then
+                $EDITOR "$GUT_PANTRY/$file"
+            else
+                gut_print "Edit: ${CYAN}$GUT_PANTRY/$file${NC}"
+            fi
+            ;;
+        add)
+            local name="$2"
+            if [[ -z "$name" ]]; then
+                read -p "Context file name (e.g., 'api', 'database'): " name
+            fi
+            local file="$GUT_PANTRY/${name}.md"
+            echo "# ${name^} Context" > "$file"
+            echo "" >> "$file"
+            echo "[Add relevant context about $name here]" >> "$file"
+            gut_success "Created: $file"
+            [[ -n "$EDITOR" ]] && $EDITOR "$file"
+            ;;
+        show)
+            for f in "$GUT_PANTRY"/*.md; do
+                [[ -f "$f" ]] || continue
+                gut_print "${BOLD}=== $(basename "$f") ===${NC}"
+                cat "$f"
+                echo ""
+            done
+            ;;
+        *)
+            gut_error "Unknown pantry command: $action"
+            ;;
+    esac
+}
+
+cmd_status() {
+    gut_check_init
+
+    gut_header "${CHEF} Kitchen Status"
+
+    # Show current branch if in git
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        local branch=$(git branch --show-current)
+        gut_print "Branch: ${CYAN}$branch${NC}"
+
+        # Check if it's a gut branch
+        if [[ "$branch" == gut/* ]]; then
+            local slug="${branch#gut/}"
+            gut_print "Active recipe: ${BOLD}$slug${NC}"
+        fi
+        gut_print ""
+    fi
+
+    # Find what's actively cooking
+    gut_print "${BOLD}What's cooking:${NC}"
+    local found=0
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+        local name=$(basename "$recipe" .md)
+
+        if [[ "$status" == "cooking" ]] || [[ "$status" == "tasting" ]]; then
+            local title=$(grep -m1 "^# " "$recipe" | sed 's/^# //')
+            gut_print "  ${FIRE} $name: $title ($status)"
+            found=1
+        fi
+    done
+
+    [[ $found -eq 0 ]] && gut_print "  Nothing actively cooking"
+
+    # Show prepped and ready
+    gut_print ""
+    gut_print "${BOLD}Ready to cook:${NC}"
+    found=0
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+        local name=$(basename "$recipe" .md)
+
+        if [[ "$status" == "prepped" ]]; then
+            local title=$(grep -m1 "^# " "$recipe" | sed 's/^# //')
+            gut_print "  ${PREP} $name: $title"
+            found=1
+        fi
+    done
+
+    [[ $found -eq 0 ]] && gut_print "  Nothing prepped"
+    echo ""
+}
+
+cmd_ingredients() {
+    gut_check_init
+
+    local slug="$1"
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut ingredients <recipe-name>"
+    fi
+
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+    local prep_file="$GUT_PREP/${slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found."
+    fi
+
+    gut_header "🥘 Ingredients for: $slug"
+
+    gut_print "${BOLD}Context needed:${NC}"
+    gut_print ""
+
+    # List pantry files
+    gut_print "From pantry:"
+    for f in "$GUT_PANTRY"/*.md; do
+        [[ -f "$f" ]] && gut_print "  • $(basename "$f")"
+    done
+
+    gut_print ""
+    gut_print "Recipe: ${CYAN}$recipe_file${NC}"
+    [[ -f "$prep_file" ]] && gut_print "Prep:   ${CYAN}$prep_file${NC}"
+
+    gut_print ""
+    gut_print "${BOLD}Quick copy for AI:${NC}"
+    gut_print ""
+    gut_print "Paste this into your AI assistant:"
+    gut_print "${CYAN}---${NC}"
+    gut_print "Read these files to understand the task:"
+    for f in "$GUT_PANTRY"/*.md; do
+        [[ -f "$f" ]] && gut_print "- $f"
+    done
+    gut_print "- $recipe_file"
+    [[ -f "$prep_file" ]] && gut_print "- $prep_file"
+    gut_print "${CYAN}---${NC}"
+    echo ""
+}
+
+cmd_spoiled() {
+    gut_check_init
+
+    gut_header "🗑️  Checking for spoiled recipes..."
+
+    local found=0
+    local now=$(date +%s)
+    local week_ago=$((now - 604800))  # 7 days in seconds
+
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+        local name=$(basename "$recipe" .md)
+
+        # Skip served recipes
+        [[ "$status" == "served" ]] && continue
+
+        # Check modification time
+        local mtime=$(stat -f %m "$recipe" 2>/dev/null || stat -c %Y "$recipe" 2>/dev/null)
+
+        if [[ $mtime -lt $week_ago ]]; then
+            local title=$(grep -m1 "^# " "$recipe" | sed 's/^# //')
+            local days_old=$(( (now - mtime) / 86400 ))
+            gut_warn "$name ($status) - $days_old days old"
+            found=1
+        fi
+    done
+
+    if [[ $found -eq 0 ]]; then
+        gut_success "No spoiled recipes! Kitchen is fresh."
+    else
+        gut_print ""
+        gut_print "Consider completing or archiving these recipes."
+    fi
+    echo ""
+}
+
+#-----------------------------------------------------------------------------
+# Reactive Mode Commands
+#-----------------------------------------------------------------------------
+
+# Get current active recipe (if any)
+get_active_recipe() {
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        local branch=$(git branch --show-current 2>/dev/null)
+        if [[ "$branch" == gut/* ]]; then
+            echo "${branch#gut/}"
+            return 0
+        fi
+    fi
+
+    # Check for cooking recipes
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+        if [[ "$status" == "cooking" ]]; then
+            basename "$recipe" .md
+            return 0
+        fi
+    done
+
+    echo ""
+}
+
+cmd_season() {
+    gut_check_init
+
+    local message="$1"
+    local recipe=$(get_active_recipe)
+
+    if [[ -z "$message" ]]; then
+        gut_header "${SEASON} Seasoning"
+
+        # Show recent seasonings
+        if [[ -n "$recipe" ]] && [[ -f "$GUT_SEASONING/${recipe}.log" ]]; then
+            gut_print "Recent adjustments for ${BOLD}$recipe${NC}:"
+            tail -10 "$GUT_SEASONING/${recipe}.log" | while read line; do
+                gut_print "  $line"
+            done
+        else
+            gut_print "No active recipe or seasonings yet."
+        fi
+
+        gut_print ""
+        gut_print "Usage: ${CYAN}gut season \"fix port to 3001\"${NC}"
+        gut_print ""
+        gut_print "This logs quick adjustments and sets REACTIVE mode for AI."
+        return 0
+    fi
+
+    # Log the seasoning
+    local log_file="$GUT_SEASONING/${recipe:-general}.log"
+    echo "[$(timestamp)] $message" >> "$log_file"
+
+    # Create reactive context file
+    local context_file="$GUT_SEASONING/current.md"
+    local mode_instructions=""
+    [[ -f "$GUT_MODES/reactive.md" ]] && mode_instructions=$(cat "$GUT_MODES/reactive.md")
+
+    cat > "$context_file" << EOF
+# Quick Fix: $message
+
+---
+mode: reactive
+recipe: ${recipe:-none}
+created: $(timestamp)
+---
+
+$mode_instructions
+
+---
+
+## The Fix Needed
+
+$message
+
+## Context
+
+EOF
+
+    # Add minimal context
+    if [[ -n "$recipe" ]] && [[ -f "$GUT_RECIPES/${recipe}.md" ]]; then
+        echo "Active recipe: $recipe" >> "$context_file"
+        echo "" >> "$context_file"
+    fi
+
+    # Add recent seasonings for context
+    if [[ -f "$log_file" ]]; then
+        echo "### Recent adjustments:" >> "$context_file"
+        tail -5 "$log_file" >> "$context_file"
+    fi
+
+    gut_success "Seasoning logged!"
+    gut_print ""
+    gut_print "Mode: ${YELLOW}REACTIVE${NC} (surgical fix only)"
+    [[ -n "$recipe" ]] && gut_print "Recipe: ${CYAN}$recipe${NC}"
+    gut_print ""
+    gut_print "AI context: ${CYAN}$context_file${NC}"
+    gut_print ""
+    gut_print "After fixing, commit with:"
+    gut_print "  ${CYAN}git commit -m \"fix: $message\"${NC}"
+    echo ""
+}
+
+cmd_flame() {
+    gut_check_init
+
+    local message="$1"
+    local recipe=$(get_active_recipe)
+
+    gut_header "${FLAME} FIRE! Emergency Mode"
+
+    # Create flame log entry
+    local flame_file="$GUT_FLAME/$(datestamp)-$(date +%H%M%S).md"
+
+    local mode_instructions=""
+    [[ -f "$GUT_MODES/emergency.md" ]] && mode_instructions=$(cat "$GUT_MODES/emergency.md")
+
+    cat > "$flame_file" << EOF
+# Emergency: ${message:-"Unknown issue"}
+
+---
+mode: emergency
+recipe: ${recipe:-none}
+created: $(timestamp)
+status: active
+---
+
+$mode_instructions
+
+---
+
+## What's Broken
+
+${message:-"[Describe what's broken]"}
+
+## Diagnosis
+
+[What did you find?]
+
+## Fix Applied
+
+[What fixed it?]
+
+## Root Cause
+
+[Why did this happen?]
+
+## Follow-up Needed
+
+- [ ] Proper fix if this was a bandaid
+- [ ] Tests to prevent recurrence
+- [ ] Documentation update
+EOF
+
+    gut_print "${RED}${BOLD}EMERGENCY MODE ACTIVE${NC}"
+    gut_print ""
+    gut_print "Priority: Fix it NOW. Skip nice-to-haves."
+    gut_print ""
+    gut_print "Log file: ${CYAN}$flame_file${NC}"
+    gut_print ""
+
+    if [[ -z "$message" ]]; then
+        gut_print "What's on fire? Describe the issue:"
+        gut_print "  ${CYAN}gut flame \"API returning 500 errors\"${NC}"
+        gut_print ""
+        gut_print "Or edit the log directly and start debugging."
+    else
+        gut_print "Issue: ${BOLD}$message${NC}"
+        gut_print ""
+        gut_print "Steps:"
+        gut_print "  1. Diagnose - what exactly broke?"
+        gut_print "  2. Smallest fix to restore functionality"
+        gut_print "  3. Commit: ${CYAN}git commit -m \"hotfix: $message\"${NC}"
+        gut_print "  4. Update ${CYAN}$flame_file${NC} with what you found"
+    fi
+    echo ""
+
+    # Open in editor if available
+    if [[ -n "$EDITOR" ]] && [[ -n "$message" ]]; then
+        read -p "Open flame log in editor? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            $EDITOR "$flame_file"
+        fi
+    fi
+}
+
+cmd_doctor() {
+    gut_check_init
+
+    gut_header "${DOCTOR} Kitchen Health Check"
+
+    local health_file="$GUT_PANTRY/health.yml"
+    local all_good=true
+
+    # Check if health.yml exists and has content
+    if [[ ! -f "$health_file" ]] || ! grep -v "^#" "$health_file" | grep -q "[a-z]"; then
+        gut_print "No health checks configured yet."
+        gut_print ""
+        gut_print "Edit ${CYAN}$health_file${NC} to add:"
+        gut_print "  • ports to check"
+        gut_print "  • required env vars"
+        gut_print "  • services to verify"
+        gut_print "  • commands to validate"
+        echo ""
+
+        # Run basic checks anyway
+        gut_print "${BOLD}Basic checks:${NC}"
+        gut_print ""
+    fi
+
+    # Git status
+    gut_print "${BOLD}Git:${NC}"
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        local branch=$(git branch --show-current)
+        gut_print "  ${CHECK} Repository initialized"
+        gut_print "  ${CHECK} On branch: $branch"
+
+        if [[ -n $(git status --porcelain 2>/dev/null) ]]; then
+            gut_print "  ${WARN} Uncommitted changes"
+        else
+            gut_print "  ${CHECK} Working tree clean"
+        fi
+    else
+        gut_print "  ${WARN} Not a git repository"
+        all_good=false
+    fi
+    echo ""
+
+    # Check common ports (if lsof available)
+    if command -v lsof &> /dev/null; then
+        gut_print "${BOLD}Common Ports:${NC}"
+        for port in 3000 3001 5432 6379 8080; do
+            if lsof -i :$port > /dev/null 2>&1; then
+                local proc=$(lsof -i :$port -t 2>/dev/null | head -1)
+                local name=$(ps -p "$proc" -o comm= 2>/dev/null || echo "unknown")
+                gut_print "  ${YELLOW}●${NC} :$port in use ($name)"
+            else
+                gut_print "  ${GREEN}○${NC} :$port available"
+            fi
+        done
+        echo ""
+    fi
+
+    # Check common env vars
+    gut_print "${BOLD}Environment:${NC}"
+    local env_vars=("DATABASE_URL" "API_KEY" "NODE_ENV" "PORT")
+    for var in "${env_vars[@]}"; do
+        if [[ -n "${!var}" ]]; then
+            # Mask sensitive values
+            if [[ "$var" == *"KEY"* ]] || [[ "$var" == *"SECRET"* ]] || [[ "$var" == *"PASSWORD"* ]]; then
+                gut_print "  ${CHECK} $var = ****"
+            else
+                gut_print "  ${CHECK} $var = ${!var}"
+            fi
+        else
+            gut_print "  ${YELLOW}○${NC} $var not set"
+        fi
+    done
+    echo ""
+
+    # Check for .env file
+    if [[ -f ".env" ]]; then
+        gut_print "  ${CHECK} .env file exists"
+    elif [[ -f ".env.example" ]]; then
+        gut_print "  ${WARN} .env.example exists but no .env"
+        gut_print "      Run: ${CYAN}cp .env.example .env${NC}"
+        all_good=false
+    fi
+    echo ""
+
+    # Check common tools
+    gut_print "${BOLD}Tools:${NC}"
+    local tools=("node" "npm" "git" "gh")
+    for tool in "${tools[@]}"; do
+        if command -v "$tool" &> /dev/null; then
+            local version=$("$tool" --version 2>/dev/null | head -1)
+            gut_print "  ${CHECK} $tool ($version)"
+        else
+            gut_print "  ${YELLOW}○${NC} $tool not found"
+        fi
+    done
+    echo ""
+
+    # Check gut status
+    gut_print "${BOLD}Kitchen:${NC}"
+    local cooking=0
+    for recipe in "$GUT_RECIPES"/*.md; do
+        [[ -f "$recipe" ]] || continue
+        local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+        [[ "$status" == "cooking" ]] && ((cooking++))
+    done
+    gut_print "  ${CHECK} gut initialized"
+    gut_print "  📝 $cooking recipe(s) cooking"
+
+    # Check for stale flames
+    local active_flames=$(find "$GUT_FLAME" -name "*.md" -mtime -1 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$active_flames" -gt 0 ]]; then
+        gut_print "  ${FLAME} $active_flames recent fire(s) - check $GUT_FLAME/"
+    fi
+    echo ""
+
+    if $all_good; then
+        gut_success "Kitchen is healthy!"
+    else
+        gut_warn "Some issues found. See above."
+    fi
+    echo ""
+}
+
+cmd_context() {
+    gut_check_init
+
+    local slug="$1"
+    local mode="${2:-planned}"
+    local recipe=$(get_active_recipe)
+
+    # Use provided slug or active recipe
+    slug="${slug:-$recipe}"
+
+    gut_header "📋 Context Dump"
+
+    local output=""
+
+    # Add mode instructions
+    if [[ -f "$GUT_MODES/${mode}.md" ]]; then
+        output+="$(cat "$GUT_MODES/${mode}.md")"
+        output+="\n\n---\n\n"
+    fi
+
+    # Add pantry context
+    output+="# Project Context\n\n"
+    for f in "$GUT_PANTRY"/*.md; do
+        [[ -f "$f" ]] || continue
+        output+="## $(basename "$f" .md)\n\n"
+        output+="$(cat "$f")\n\n"
+    done
+
+    # Add recipe if specified
+    if [[ -n "$slug" ]] && [[ -f "$GUT_RECIPES/${slug}.md" ]]; then
+        output+="\n---\n\n# Recipe: $slug\n\n"
+        output+="$(cat "$GUT_RECIPES/${slug}.md")\n"
+
+        # Add prep if exists
+        if [[ -f "$GUT_PREP/${slug}.md" ]]; then
+            output+="\n---\n\n# Prep Plan\n\n"
+            output+="$(cat "$GUT_PREP/${slug}.md")\n"
+        fi
+
+        # Add seasonings if exist
+        if [[ -f "$GUT_SEASONING/${slug}.log" ]]; then
+            output+="\n---\n\n# Recent Adjustments\n\n"
+            output+="\`\`\`\n$(tail -10 "$GUT_SEASONING/${slug}.log")\n\`\`\`\n"
+        fi
+    fi
+
+    # Try to copy to clipboard
+    if command -v pbcopy &> /dev/null; then
+        echo -e "$output" | pbcopy
+        gut_success "Context copied to clipboard!"
+    elif command -v xclip &> /dev/null; then
+        echo -e "$output" | xclip -selection clipboard
+        gut_success "Context copied to clipboard!"
+    else
+        gut_warn "No clipboard tool found. Printing to stdout:"
+        echo ""
+        echo -e "$output"
+    fi
+
+    gut_print ""
+    gut_print "Mode: ${CYAN}$mode${NC}"
+    [[ -n "$slug" ]] && gut_print "Recipe: ${CYAN}$slug${NC}"
+    gut_print ""
+    gut_print "Usage:"
+    gut_print "  gut context                    # current recipe, planned mode"
+    gut_print "  gut context <recipe>           # specific recipe"
+    gut_print "  gut context <recipe> reactive  # with reactive mode"
+    echo ""
+}
+
+# Extract open questions from a recipe file
+get_recipe_questions() {
+    local recipe_file="$1"
+    local questions=()
+
+    if [[ -f "$recipe_file" ]]; then
+        # Get questions from ## Open Questions section
+        local in_questions=false
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^##[[:space:]]*Open[[:space:]]*Questions ]]; then
+                in_questions=true
+                continue
+            fi
+            if [[ "$in_questions" == true ]] && [[ "$line" =~ ^## ]]; then
+                break
+            fi
+            if [[ "$in_questions" == true ]] && [[ "$line" =~ ^-[[:space:]]*.+ ]]; then
+                local q=$(echo "$line" | sed 's/^-[[:space:]]*//' | sed 's/\[.*\]//' | sed 's/^[[:space:]]*//')
+                [[ -n "$q" ]] && questions+=("$q")
+            fi
+        done < "$recipe_file"
+    fi
+
+    printf '%s\n' "${questions[@]}"
+}
+
+# Extract unchecked steps from a prep file
+get_prep_steps() {
+    local prep_file="$1"
+    local steps=()
+
+    if [[ -f "$prep_file" ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ \[[[:space:]]\] ]]; then
+                local step=$(echo "$line" | sed 's/.*\[[[:space:]]\][[:space:]]*//')
+                [[ -n "$step" ]] && steps+=("$step")
+            fi
+        done < "$prep_file"
+    fi
+
+    printf '%s\n' "${steps[@]}"
+}
+
+# Extract checked steps from a prep file
+get_completed_steps() {
+    local prep_file="$1"
+    local steps=()
+
+    if [[ -f "$prep_file" ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ \[[xX]\] ]]; then
+                local step=$(echo "$line" | sed 's/.*\[[xX]\][[:space:]]*//')
+                [[ -n "$step" ]] && steps+=("$step")
+            fi
+        done < "$prep_file"
+    fi
+
+    printf '%s\n' "${steps[@]}"
+}
+
+# Count steps
+count_steps() {
+    local prep_file="$1"
+    local total=0
+    local done=0
+
+    if [[ -f "$prep_file" ]]; then
+        total=$(grep -c '\[[[:space:]xX]\]' "$prep_file" 2>/dev/null || echo 0)
+        done=$(grep -c '\[[xX]\]' "$prep_file" 2>/dev/null || echo 0)
+    fi
+
+    echo "$done/$total"
+}
+
+cmd_resume() {
+    gut_check_init
+
+    local output_mode="show"
+    local json_mode=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json|-j)
+                json_mode=true
+                shift
+                ;;
+            *)
+                output_mode="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if ! is_git_repo; then
+        if [[ "$json_mode" == true ]]; then
+            echo '{"error": "Not a git repository"}'
+            return 1
+        fi
+        gut_error "Not a git repository"
+    fi
+
+    local current_branch=$(get_current_branch)
+    local default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+
+    # Get recipes on this branch
+    local recipes=$(get_branch_recipes "$current_branch")
+    local recipe_count=$(echo "$recipes" | wc -w | tr -d ' ')
+    [[ -z "$recipes" ]] && recipe_count=0
+
+    # JSON output mode
+    if [[ "$json_mode" == true ]]; then
+        local json='{'
+        json+="\"branch\":\"$current_branch\","
+        json+="\"default_branch\":\"$default_branch\","
+        json+="\"generated\":\"$(timestamp)\","
+
+        # Recipes array
+        json+="\"recipes\":["
+        local first_recipe=true
+        for r in $recipes; do
+            [[ -z "$r" ]] && continue
+            local recipe_file="$GUT_RECIPES/${r}.md"
+            local prep_file="$GUT_PREP/${r}.md"
+
+            local status=$(grep -m1 "^status:" "$recipe_file" 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+            local title=$(grep -m1 "^# " "$recipe_file" 2>/dev/null | sed 's/^# //' | sed 's/"/\\"/g' || echo "$r")
+            local what=$(sed -n '/## What/,/## /p' "$recipe_file" 2>/dev/null | grep -v "^##" | head -2 | tr '\n' ' ' | sed 's/"/\\"/g')
+            local progress=$(count_steps "$prep_file")
+
+            # Get open questions
+            local questions_json="["
+            local first_q=true
+            while IFS= read -r q; do
+                [[ -z "$q" ]] && continue
+                q=$(echo "$q" | sed 's/"/\\"/g')
+                [[ "$first_q" == true ]] && first_q=false || questions_json+=","
+                questions_json+="\"$q\""
+            done <<< "$(get_recipe_questions "$recipe_file")"
+            questions_json+="]"
+
+            # Get pending steps
+            local steps_json="["
+            local first_s=true
+            while IFS= read -r s; do
+                [[ -z "$s" ]] && continue
+                s=$(echo "$s" | sed 's/"/\\"/g')
+                [[ "$first_s" == true ]] && first_s=false || steps_json+=","
+                steps_json+="{\"done\":false,\"text\":\"$s\"}"
+            done <<< "$(get_prep_steps "$prep_file")"
+
+            # Add completed steps
+            while IFS= read -r s; do
+                [[ -z "$s" ]] && continue
+                s=$(echo "$s" | sed 's/"/\\"/g')
+                [[ "$first_s" == true ]] && first_s=false || steps_json+=","
+                steps_json+="{\"done\":true,\"text\":\"$s\"}"
+            done <<< "$(get_completed_steps "$prep_file")"
+            steps_json+="]"
+
+            [[ "$first_recipe" == true ]] && first_recipe=false || json+=","
+            json+="{"
+            json+="\"slug\":\"$r\","
+            json+="\"status\":\"$status\","
+            json+="\"title\":\"$title\","
+            json+="\"what\":\"$what\","
+            json+="\"progress\":\"$progress\","
+            json+="\"recipe_file\":\".gut/recipes/${r}.md\","
+            json+="\"prep_file\":\".gut/prep/${r}.md\","
+            json+="\"open_questions\":$questions_json,"
+            json+="\"steps\":$steps_json"
+            json+="}"
+        done
+        json+="],"
+
+        # Files changed
+        json+="\"files_changed\":["
+        local changed_files=$(git diff --name-only "$default_branch"...HEAD 2>/dev/null || echo "")
+        local first_file=true
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            [[ "$first_file" == true ]] && first_file=false || json+=","
+            json+="\"$file\""
+        done <<< "$changed_files"
+        json+="],"
+
+        # Recent commits
+        json+="\"commits\":["
+        local commits=$(git log --oneline -10 --no-merges 2>/dev/null || echo "")
+        local first_commit=true
+        while IFS= read -r commit; do
+            [[ -z "$commit" ]] && continue
+            local hash=$(echo "$commit" | cut -d' ' -f1)
+            local msg=$(echo "$commit" | cut -d' ' -f2- | sed 's/"/\\"/g')
+            [[ "$first_commit" == true ]] && first_commit=false || json+=","
+            json+="{\"hash\":\"$hash\",\"message\":\"$msg\"}"
+        done <<< "$commits"
+        json+="],"
+
+        # Seasonings
+        json+="\"seasonings\":["
+        local first_season=true
+        for r in $recipes; do
+            [[ -z "$r" ]] && continue
+            if [[ -f "$GUT_SEASONING/${r}.log" ]]; then
+                while IFS= read -r line; do
+                    [[ -z "$line" ]] && continue
+                    line=$(echo "$line" | sed 's/"/\\"/g')
+                    [[ "$first_season" == true ]] && first_season=false || json+=","
+                    json+="{\"recipe\":\"$r\",\"entry\":\"$line\"}"
+                done < "$GUT_SEASONING/${r}.log"
+            fi
+        done
+        json+="]"
+
+        json+='}'
+        echo "$json"
+        return 0
+    fi
+
+    # Human-readable output
+    gut_header "🔄 Resume: Pick up where you left off"
+
+    gut_print "${BOLD}Branch:${NC} $current_branch"
+    gut_print ""
+
+    # Build resume document
+    local resume_doc="# Resume: $current_branch\n\n"
+    resume_doc+="Generated: $(timestamp)\n\n"
+    resume_doc+="---\n\n"
+
+    # Recipes section
+    resume_doc+="## Active Recipes ($recipe_count)\n\n"
+
+    if [[ -z "$recipes" ]] || [[ "$recipe_count" -eq 0 ]]; then
+        gut_print "${YELLOW}No recipes linked to this branch.${NC}"
+        resume_doc+="No recipes linked to this branch.\n\n"
+    else
+        gut_print "${BOLD}Recipes on this branch:${NC}"
+        for r in $recipes; do
+            local recipe_file="$GUT_RECIPES/${r}.md"
+            local status=$(grep -m1 "^status:" "$recipe_file" 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+            local title=$(grep -m1 "^# " "$recipe_file" 2>/dev/null | sed 's/^# //' || echo "$r")
+
+            case "$status" in
+                cooking) gut_print "  ${COOK} $r: $title (${status})" ;;
+                tasting) gut_print "  ${TASTE} $r: $title (${status})" ;;
+                *)       gut_print "  📝 $r: $title (${status})" ;;
+            esac
+
+            resume_doc+="### $r ($status)\n\n"
+            resume_doc+="**$title**\n\n"
+
+            # Add what/why from recipe
+            local what=$(sed -n '/## What/,/## /p' "$recipe_file" 2>/dev/null | grep -v "^##" | head -3 | tr '\n' ' ')
+            resume_doc+="$what\n\n"
+        done
+    fi
+    echo ""
+
+    # Files changed section
+    gut_print "${BOLD}Files changed (vs $default_branch):${NC}"
+    resume_doc+="## Files Changed\n\n"
+
+    local changed_files=$(git diff --name-only "$default_branch"...HEAD 2>/dev/null || git diff --name-only HEAD~10..HEAD 2>/dev/null || echo "")
+
+    if [[ -z "$changed_files" ]]; then
+        gut_print "  No files changed yet"
+        resume_doc+="No files changed yet.\n\n"
+    else
+        local file_count=0
+        resume_doc+="\`\`\`\n"
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            local status_char="M"
+            if [[ ! -f "$file" ]]; then
+                status_char="D"
+            elif ! git ls-files --error-unmatch "$file" &>/dev/null 2>&1; then
+                status_char="A"
+            fi
+            gut_print "  ${status_char} $file"
+            resume_doc+="$status_char $file\n"
+            ((file_count++))
+            [[ $file_count -ge 20 ]] && gut_print "  ... and more" && break
+        done <<< "$changed_files"
+        resume_doc+="\`\`\`\n\n"
+    fi
+    echo ""
+
+    # Recent commits section
+    gut_print "${BOLD}Recent commits:${NC}"
+    resume_doc+="## Recent Commits\n\n"
+
+    local commits=$(git log --oneline -10 --no-merges 2>/dev/null || echo "")
+
+    if [[ -z "$commits" ]]; then
+        gut_print "  No commits yet"
+        resume_doc+="No commits yet.\n\n"
+    else
+        resume_doc+="\`\`\`\n"
+        while IFS= read -r commit; do
+            [[ -z "$commit" ]] && continue
+            local hash=$(echo "$commit" | cut -d' ' -f1)
+            local msg=$(echo "$commit" | cut -d' ' -f2-)
+            gut_print "  ${CYAN}$hash${NC} $msg"
+            resume_doc+="$commit\n"
+        done <<< "$commits"
+        resume_doc+="\`\`\`\n\n"
+    fi
+    echo ""
+
+    # Seasonings (quick fixes) section
+    local has_seasonings=false
+    for r in $recipes; do
+        if [[ -f "$GUT_SEASONING/${r}.log" ]]; then
+            has_seasonings=true
+            break
+        fi
+    done
+
+    if [[ "$has_seasonings" == true ]]; then
+        gut_print "${BOLD}Quick fixes (seasonings):${NC}"
+        resume_doc+="## Quick Fixes Applied\n\n"
+
+        for r in $recipes; do
+            if [[ -f "$GUT_SEASONING/${r}.log" ]]; then
+                gut_print "  ${SEASON} $r:"
+                resume_doc+="### $r\n\n\`\`\`\n"
+                tail -5 "$GUT_SEASONING/${r}.log" | while read line; do
+                    gut_print "    $line"
+                done
+                tail -5 "$GUT_SEASONING/${r}.log" >> /dev/null  # Just for resume_doc
+                resume_doc+="$(tail -5 "$GUT_SEASONING/${r}.log")\n\`\`\`\n\n"
+            fi
+        done
+        echo ""
+    fi
+
+    # AI Instructions section
+    resume_doc+="---\n\n"
+    resume_doc+="## AI Instructions\n\n"
+    resume_doc+="You are resuming work on branch \`$current_branch\`.\n\n"
+    resume_doc+="### Files to Review\n\n"
+    resume_doc+="1. Read the recipe(s) listed above to understand the goals\n"
+    resume_doc+="2. Check the changed files to see current progress\n"
+    resume_doc+="3. Review recent commits to understand what's done\n"
+    resume_doc+="4. Look at quick fixes for any adjustments made\n\n"
+
+    if [[ -n "$recipes" ]]; then
+        resume_doc+="### Key Files\n\n"
+        for r in $recipes; do
+            resume_doc+="- Recipe: \`.gut/recipes/${r}.md\`\n"
+            [[ -f "$GUT_PREP/${r}.md" ]] && resume_doc+="- Prep: \`.gut/prep/${r}.md\`\n"
+        done
+        resume_doc+="\n"
+    fi
+
+    resume_doc+="### Next Steps\n\n"
+    resume_doc+="1. Review the current state of the code\n"
+    resume_doc+="2. Check what's left to do in the recipe success criteria\n"
+    resume_doc+="3. Continue implementation from where it left off\n"
+    resume_doc+="4. Run \`gut taste <recipe>\` when ready to verify\n"
+    resume_doc+="5. Run \`gut serve\` when all recipes are complete\n"
+
+    # Output options
+    gut_print "${BOLD}Resume document:${NC}"
+
+    case "$output_mode" in
+        copy|clipboard)
+            if command -v pbcopy &> /dev/null; then
+                echo -e "$resume_doc" | pbcopy
+                gut_success "Resume document copied to clipboard!"
+            elif command -v xclip &> /dev/null; then
+                echo -e "$resume_doc" | xclip -selection clipboard
+                gut_success "Resume document copied to clipboard!"
+            else
+                gut_warn "No clipboard available. Use: gut resume file"
+            fi
+            ;;
+        file)
+            local resume_file="$GUT_DIR/resume-$(datestamp).md"
+            echo -e "$resume_doc" > "$resume_file"
+            gut_success "Resume document saved: $resume_file"
+            ;;
+        show|*)
+            gut_print ""
+            gut_print "  ${CYAN}gut resume copy${NC}   - copy to clipboard for AI"
+            gut_print "  ${CYAN}gut resume file${NC}   - save to .gut/resume-*.md"
+            ;;
+    esac
+
+    # Show next steps based on state
+    gut_print ""
+    gut_print "${BOLD}━━━ Next ━━━${NC}"
+    if [[ -n "$recipes" ]]; then
+        local first_recipe=$(echo "$recipes" | awk '{print $1}')
+        local first_status=$(grep -m1 "^status:" "$GUT_RECIPES/${first_recipe}.md" 2>/dev/null | cut -d' ' -f2)
+        case "$first_status" in
+            draft)    gut_print "  ${CYAN}gut prep $first_recipe${NC}     - create implementation plan" ;;
+            prepped)  gut_print "  ${CYAN}gut cook $first_recipe${NC}    - start implementing" ;;
+            cooking)  gut_print "  ${CYAN}gut taste $first_recipe${NC}   - verify when done" ;;
+            tasting)  gut_print "  ${CYAN}gut serve${NC}              - ship it!" ;;
+        esac
+    else
+        gut_print "  ${CYAN}gut recipe -a \"feature\"${NC}  - create a new recipe"
+    fi
+    gut_print "  ${CYAN}gut resume copy${NC}          - copy context for AI"
+    echo ""
+}
+
+cmd_questions() {
+    gut_check_init
+
+    local recipe_slug="$1"
+    local json_mode=false
+
+    # Check for --json flag
+    for arg in "$@"; do
+        [[ "$arg" == "--json" || "$arg" == "-j" ]] && json_mode=true
+    done
+
+    local recipes=""
+    if [[ -n "$recipe_slug" && "$recipe_slug" != "--json" && "$recipe_slug" != "-j" ]]; then
+        recipes="$recipe_slug"
+    else
+        # Get all recipes on current branch or all cooking recipes
+        if is_git_repo; then
+            recipes=$(get_branch_recipes "$(get_current_branch)")
+        fi
+        if [[ -z "$recipes" ]]; then
+            # Fallback: get all cooking/prepped recipes
+            for recipe in "$GUT_RECIPES"/*.md; do
+                [[ -f "$recipe" ]] || continue
+                local status=$(grep -m1 "^status:" "$recipe" 2>/dev/null | cut -d' ' -f2)
+                if [[ "$status" == "cooking" || "$status" == "prepping" || "$status" == "draft" ]]; then
+                    recipes+="$(basename "$recipe" .md) "
+                fi
+            done
+        fi
+    fi
+
+    if [[ "$json_mode" == true ]]; then
+        local json='{"questions":['
+        local first=true
+
+        for r in $recipes; do
+            [[ -z "$r" ]] && continue
+            local recipe_file="$GUT_RECIPES/${r}.md"
+
+            local idx=0
+            while IFS= read -r q; do
+                [[ -z "$q" ]] && continue
+                q=$(echo "$q" | sed 's/"/\\"/g')
+                [[ "$first" == true ]] && first=false || json+=","
+                json+="{\"recipe\":\"$r\",\"index\":$idx,\"question\":\"$q\"}"
+                ((idx++))
+            done <<< "$(get_recipe_questions "$recipe_file")"
+        done
+
+        json+=']}'
+        echo "$json"
+        return 0
+    fi
+
+    gut_header "❓ Open Questions"
+
+    local found=false
+    for r in $recipes; do
+        [[ -z "$r" ]] && continue
+        local recipe_file="$GUT_RECIPES/${r}.md"
+        local questions=$(get_recipe_questions "$recipe_file")
+
+        if [[ -n "$questions" ]]; then
+            found=true
+            gut_print "${BOLD}$r:${NC}"
+            local idx=0
+            while IFS= read -r q; do
+                [[ -z "$q" ]] && continue
+                gut_print "  [$idx] $q"
+                ((idx++))
+            done <<< "$questions"
+            gut_print ""
+        fi
+    done
+
+    if [[ "$found" == false ]]; then
+        gut_print "No open questions found."
+        gut_print ""
+        gut_print "Add questions to recipes in the ${CYAN}## Open Questions${NC} section."
+    else
+        gut_print "Answer a question:"
+        gut_print "  ${CYAN}gut answer <recipe> <index> \"your answer\"${NC}"
+    fi
+    echo ""
+}
+
+cmd_answer() {
+    gut_check_init
+
+    local recipe_slug="$1"
+    local question_index="$2"
+    local answer="$3"
+
+    if [[ -z "$recipe_slug" || -z "$question_index" ]]; then
+        gut_error "Usage: gut answer <recipe> <question-index> \"answer\""
+    fi
+
+    local recipe_file="$GUT_RECIPES/${recipe_slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$recipe_slug' not found."
+    fi
+
+    # Get the question
+    local questions=()
+    while IFS= read -r q; do
+        [[ -n "$q" ]] && questions+=("$q")
+    done <<< "$(get_recipe_questions "$recipe_file")"
+
+    if [[ $question_index -ge ${#questions[@]} ]]; then
+        gut_error "Question index $question_index not found. Recipe has ${#questions[@]} questions."
+    fi
+
+    local question="${questions[$question_index]}"
+
+    gut_header "💬 Answering Question"
+
+    gut_print "${BOLD}Recipe:${NC} $recipe_slug"
+    gut_print "${BOLD}Question:${NC} $question"
+    gut_print ""
+
+    # If no answer provided, prompt for it
+    if [[ -z "$answer" ]]; then
+        gut_print "Enter your answer:"
+        echo -n "> "
+        read -r answer
+    fi
+
+    if [[ -z "$answer" ]]; then
+        gut_warn "No answer provided. Cancelled."
+        return 1
+    fi
+
+    gut_print "${BOLD}Answer:${NC} $answer"
+    gut_print ""
+
+    # Update the recipe file - replace the question with question + answer
+    # Find the line with this question and add answer below it
+    local escaped_question=$(echo "$question" | sed 's/[]\/$*.^[]/\\&/g')
+    local temp_file=$(mktemp)
+
+    local in_questions=false
+    local question_found=false
+    while IFS= read -r line; do
+        echo "$line" >> "$temp_file"
+
+        if [[ "$line" =~ ^##[[:space:]]*Open[[:space:]]*Questions ]]; then
+            in_questions=true
+            continue
+        fi
+
+        if [[ "$in_questions" == true ]] && [[ "$line" =~ ^## ]]; then
+            in_questions=false
+        fi
+
+        # Check if this line contains our question
+        if [[ "$in_questions" == true ]] && [[ "$question_found" == false ]]; then
+            if echo "$line" | grep -q "$escaped_question"; then
+                echo "  - **Answer:** $answer" >> "$temp_file"
+                question_found=true
+            fi
+        fi
+    done < "$recipe_file"
+
+    mv "$temp_file" "$recipe_file"
+
+    gut_success "Answer saved to recipe!"
+    gut_print ""
+    gut_print "View: ${CYAN}$recipe_file${NC}"
+    echo ""
+}
+
+cmd_step() {
+    gut_check_init
+
+    local action="$1"
+    local recipe_slug="$2"
+    local step_index="$3"
+
+    case "$action" in
+        done|complete|check)
+            if [[ -z "$recipe_slug" || -z "$step_index" ]]; then
+                gut_error "Usage: gut step done <recipe> <step-index>"
+            fi
+
+            local prep_file="$GUT_PREP/${recipe_slug}.md"
+
+            if [[ ! -f "$prep_file" ]]; then
+                gut_error "Prep file for '$recipe_slug' not found."
+            fi
+
+            # Find and mark the step as done
+            local step_count=0
+            local temp_file=$(mktemp)
+            local marked=false
+
+            while IFS= read -r line; do
+                if [[ "$line" =~ \[[[:space:]]\] ]] && [[ "$step_count" -eq "$step_index" ]]; then
+                    # Replace [ ] with [x]
+                    line=$(echo "$line" | sed 's/\[[[:space:]]\]/[x]/')
+                    marked=true
+                fi
+                if [[ "$line" =~ \[[[:space:]]\] ]]; then
+                    ((step_count++))
+                fi
+                echo "$line" >> "$temp_file"
+            done < "$prep_file"
+
+            if [[ "$marked" == true ]]; then
+                mv "$temp_file" "$prep_file"
+                gut_success "Step $step_index marked as done!"
+            else
+                rm "$temp_file"
+                gut_error "Step $step_index not found."
+            fi
+            ;;
+
+        list|"")
+            # List steps for a recipe
+            if [[ -z "$recipe_slug" ]]; then
+                # Show all recipes with pending steps
+                gut_header "📋 Pending Steps"
+
+                for prep in "$GUT_PREP"/*.md; do
+                    [[ -f "$prep" ]] || continue
+                    local r=$(basename "$prep" .md)
+                    local pending=$(get_prep_steps "$prep")
+
+                    if [[ -n "$pending" ]]; then
+                        gut_print "${BOLD}$r:${NC}"
+                        local idx=0
+                        while IFS= read -r step; do
+                            [[ -z "$step" ]] && continue
+                            gut_print "  [$idx] $step"
+                            ((idx++))
+                        done <<< "$pending"
+                        gut_print ""
+                    fi
+                done
+            else
+                local prep_file="$GUT_PREP/${recipe_slug}.md"
+
+                if [[ ! -f "$prep_file" ]]; then
+                    gut_error "Prep file for '$recipe_slug' not found."
+                fi
+
+                gut_header "📋 Steps: $recipe_slug"
+
+                local progress=$(count_steps "$prep_file")
+                gut_print "Progress: $progress"
+                gut_print ""
+
+                local idx=0
+                while IFS= read -r line; do
+                    if [[ "$line" =~ \[[xX]\] ]]; then
+                        local step=$(echo "$line" | sed 's/.*\[[xX]\][[:space:]]*//')
+                        gut_print "  ${GREEN}[x]${NC} [$idx] $step"
+                        ((idx++))
+                    elif [[ "$line" =~ \[[[:space:]]\] ]]; then
+                        local step=$(echo "$line" | sed 's/.*\[[[:space:]]\][[:space:]]*//')
+                        gut_print "  [ ] [$idx] $step"
+                        ((idx++))
+                    fi
+                done < "$prep_file"
+            fi
+            echo ""
+            ;;
+
+        --json|-j)
+            local json='{"steps":['
+            local first=true
+
+            for prep in "$GUT_PREP"/*.md; do
+                [[ -f "$prep" ]] || continue
+                local r=$(basename "$prep" .md)
+
+                local idx=0
+                while IFS= read -r line; do
+                    if [[ "$line" =~ \[[[:space:]xX]\] ]]; then
+                        local done_val="false"
+                        [[ "$line" =~ \[[xX]\] ]] && done_val="true"
+                        local step=$(echo "$line" | sed 's/.*\[[[:space:]xX]\][[:space:]]*//' | sed 's/"/\\"/g')
+
+                        [[ "$first" == true ]] && first=false || json+=","
+                        json+="{\"recipe\":\"$r\",\"index\":$idx,\"done\":$done_val,\"text\":\"$step\"}"
+                        ((idx++))
+                    fi
+                done < "$prep"
+            done
+
+            json+=']}'
+            echo "$json"
+            ;;
+
+        *)
+            gut_error "Usage: gut step [list|done] [recipe] [step-index]"
+            ;;
+    esac
+}
+
+#-----------------------------------------------------------------------------
+# Branch Management Commands
+#-----------------------------------------------------------------------------
+
+cmd_branch() {
+    gut_check_init
+
+    local action="${1:-show}"
+
+    if ! is_git_repo; then
+        gut_error "Not a git repository"
+    fi
+
+    local current_branch=$(get_current_branch)
+
+    case "$action" in
+        show|"")
+            gut_header "🌿 Branch: $current_branch"
+
+            local recipes=$(get_branch_recipes "$current_branch")
+
+            if [[ -z "$recipes" ]]; then
+                gut_print "No recipes linked to this branch."
+                gut_print ""
+                gut_print "Link a recipe with: ${CYAN}gut attach <recipe-name>${NC}"
+                gut_print "Or start cooking:   ${CYAN}gut cook <recipe-name>${NC}"
+            else
+                gut_print "${BOLD}Linked recipes:${NC}"
+                for r in $recipes; do
+                    local recipe_file="$GUT_RECIPES/${r}.md"
+                    local status=$(grep -m1 "^status:" "$recipe_file" 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+                    local title=$(grep -m1 "^# " "$recipe_file" 2>/dev/null | sed 's/^# //' || echo "$r")
+
+                    case "$status" in
+                        cooking) gut_print "  ${COOK} $r: $title" ;;
+                        tasting) gut_print "  ${TASTE} $r: $title" ;;
+                        served)  gut_print "  ${CHECK} $r: $title" ;;
+                        *)       gut_print "  📝 $r: $title" ;;
+                    esac
+                done
+            fi
+            echo ""
+            ;;
+
+        list|ls)
+            gut_header "🌿 All gut branches"
+
+            # Get all branches that have recipes attached
+            declare -A branch_recipes
+
+            for recipe in "$GUT_RECIPES"/*.md; do
+                [[ -f "$recipe" ]] || continue
+                local recipe_branch=$(get_recipe_branch "$recipe")
+                local recipe_name=$(basename "$recipe" .md)
+
+                if [[ -n "$recipe_branch" ]]; then
+                    if [[ -z "${branch_recipes[$recipe_branch]}" ]]; then
+                        branch_recipes[$recipe_branch]="$recipe_name"
+                    else
+                        branch_recipes[$recipe_branch]="${branch_recipes[$recipe_branch]} $recipe_name"
+                    fi
+                fi
+            done
+
+            if [[ ${#branch_recipes[@]} -eq 0 ]]; then
+                gut_print "No branches with linked recipes."
+            else
+                for branch in "${!branch_recipes[@]}"; do
+                    local is_current=""
+                    [[ "$branch" == "$current_branch" ]] && is_current=" ${GREEN}(current)${NC}"
+
+                    gut_print "${BOLD}$branch${NC}$is_current"
+                    for r in ${branch_recipes[$branch]}; do
+                        gut_print "  • $r"
+                    done
+                    gut_print ""
+                done
+            fi
+            ;;
+
+        create)
+            local branch_name="$2"
+            if [[ -z "$branch_name" ]]; then
+                gut_error "Usage: gut branch create <branch-name>"
+            fi
+
+            # Add gut/ prefix if not present
+            if [[ "$branch_name" != gut/* ]]; then
+                branch_name="gut/$branch_name"
+            fi
+
+            if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+                gut_print "Switching to existing branch: $branch_name"
+                git checkout "$branch_name"
+            else
+                gut_print "Creating branch: $branch_name"
+                git checkout -b "$branch_name"
+            fi
+
+            gut_success "On branch: $branch_name"
+            gut_print ""
+            gut_print "Attach recipes with: ${CYAN}gut attach <recipe-name>${NC}"
+            echo ""
+            ;;
+
+        *)
+            gut_error "Unknown branch command: $action. Use: show, list, create"
+            ;;
+    esac
+}
+
+cmd_attach() {
+    gut_check_init
+
+    local slug="$1"
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut attach <recipe-name>"
+    fi
+
+    if ! is_git_repo; then
+        gut_error "Not a git repository"
+    fi
+
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found."
+    fi
+
+    local current_branch=$(get_current_branch)
+    local old_branch=$(get_recipe_branch "$recipe_file")
+
+    gut_header "🔗 Attaching: $slug"
+
+    if [[ "$old_branch" == "$current_branch" ]]; then
+        gut_warn "Recipe is already linked to this branch."
+        return 0
+    fi
+
+    if [[ -n "$old_branch" ]]; then
+        gut_print "Moving from: ${YELLOW}$old_branch${NC}"
+    fi
+
+    set_recipe_branch "$recipe_file" "$current_branch"
+
+    gut_success "Recipe '$slug' linked to branch '$current_branch'"
+    gut_print ""
+
+    # Show all recipes on this branch now
+    local recipes=$(get_branch_recipes "$current_branch")
+    gut_print "${BOLD}Recipes on this branch:${NC}"
+    for r in $recipes; do
+        gut_print "  📝 $r"
+    done
+    echo ""
+}
+
+cmd_detach() {
+    gut_check_init
+
+    local slug="$1"
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut detach <recipe-name>"
+    fi
+
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    if [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found."
+    fi
+
+    local old_branch=$(get_recipe_branch "$recipe_file")
+
+    gut_header "🔓 Detaching: $slug"
+
+    if [[ -z "$old_branch" ]]; then
+        gut_warn "Recipe is not linked to any branch."
+        return 0
+    fi
+
+    # Remove branch from recipe
+    sed -i.bak '/^branch:/d' "$recipe_file" && rm -f "${recipe_file}.bak"
+
+    gut_success "Recipe '$slug' detached from '$old_branch'"
+    gut_print ""
+    gut_print "Re-attach with: ${CYAN}gut attach $slug${NC}"
+    echo ""
+}
+
+cmd_combine() {
+    gut_check_init
+
+    if ! is_git_repo; then
+        gut_error "Not a git repository"
+    fi
+
+    local current_branch=$(get_current_branch)
+
+    gut_header "📦 Combine Preview: $current_branch"
+
+    local recipes=$(get_active_branch_recipes)
+
+    if [[ -z "$recipes" ]]; then
+        gut_print "No active recipes on this branch."
+        gut_print ""
+        gut_print "Attach recipes with: ${CYAN}gut attach <recipe-name>${NC}"
+        return 0
+    fi
+
+    gut_print "${BOLD}Will serve together:${NC}"
+    gut_print ""
+
+    local combined_what=""
+    local combined_why=""
+
+    for r in $recipes; do
+        local recipe_file="$GUT_RECIPES/${r}.md"
+        local title=$(grep -m1 "^# " "$recipe_file" | sed 's/^# //')
+        local status=$(grep -m1 "^status:" "$recipe_file" 2>/dev/null | cut -d' ' -f2)
+        local what=$(sed -n '/## What/,/## /p' "$recipe_file" | grep -v "^##" | head -3 | tr '\n' ' ')
+
+        case "$status" in
+            cooking) gut_print "  ${COOK} ${BOLD}$r${NC}: $title" ;;
+            tasting) gut_print "  ${TASTE} ${BOLD}$r${NC}: $title" ;;
+            *)       gut_print "  📝 ${BOLD}$r${NC}: $title" ;;
+        esac
+
+        gut_print "     $what"
+        gut_print ""
+    done
+
+    gut_print "${BOLD}PR will include:${NC}"
+    local count=$(echo "$recipes" | wc -w | tr -d ' ')
+    gut_print "  • $count recipe(s)"
+    gut_print "  • Combined What/Why sections"
+    gut_print "  • All changes on branch"
+    gut_print ""
+    gut_print "Ready? Run: ${CYAN}gut serve${NC}"
+    echo ""
+}
+
+#-----------------------------------------------------------------------------
+# Main
+#-----------------------------------------------------------------------------
+
+main() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        # Planned workflow
+        init)        cmd_init "$@" ;;
+        recipe)      cmd_recipe "$@" ;;
+        prep)        cmd_prep "$@" ;;
+        cook)        cmd_cook "$@" ;;
+        taste)       cmd_taste "$@" ;;
+        serve)       cmd_serve "$@" ;;
+
+        # Branch management
+        branch)      cmd_branch "$@" ;;
+        attach)      cmd_attach "$@" ;;
+        detach)      cmd_detach "$@" ;;
+        combine)     cmd_combine "$@" ;;
+
+        # Reactive mode
+        season)      cmd_season "$@" ;;
+        flame|fire)  cmd_flame "$@" ;;
+        doctor)      cmd_doctor "$@" ;;
+
+        # Kitchen management
+        menu)        cmd_menu "$@" ;;
+        pantry)      cmd_pantry "$@" ;;
+        status)      cmd_status "$@" ;;
+        resume)      cmd_resume "$@" ;;
+        context)     cmd_context "$@" ;;
+        questions)   cmd_questions "$@" ;;
+        answer)      cmd_answer "$@" ;;
+        step|steps)  cmd_step "$@" ;;
+        ingredients) cmd_ingredients "$@" ;;
+        spoiled)     cmd_spoiled "$@" ;;
+
+        # Meta
+        version|-v|--version) cmd_version ;;
+        help|-h|--help) cmd_help ;;
+        *)
+            gut_error "Unknown command: $cmd. Run 'gut help' for usage."
+            ;;
+    esac
+}
+
+main "$@"
