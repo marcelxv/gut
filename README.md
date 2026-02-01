@@ -1,4 +1,4 @@
-# gut
+# gut 👅
 
 **AI-native development workflow for the terminal.**
 
