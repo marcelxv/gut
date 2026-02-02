@@ -118,6 +118,12 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# Warm colors for gut read (food-themed)
+ORANGE='\033[38;5;208m'
+WARM_YELLOW='\033[38;5;220m'
+WARM_RED='\033[38;5;203m'
+DIM='\033[2m'
+
 # Emoji (because cooking should be fun)
 CHEF="🧑‍🍳"
 RECIPE="📝"
@@ -380,6 +386,9 @@ cmd_help() {
     gut show <receita>    Exibir resumo inteligente de prep/receita
     gut show <receita> --json  Saída JSON estruturada
     gut next [receita]    Mostrar próxima ação a realizar
+    gut read <receita>    📖  Ler receita/prep com formatação bonita
+    gut read <receita> --prep  Ler arquivo prep
+    gut read pantry       Ler contexto do projeto
     gut questions         Listar perguntas em aberto
     gut answer            Responder uma pergunta
     gut step              Gerenciar passos do plano
@@ -446,6 +455,9 @@ EOF
     gut show <recipe>     Smart display of prep/recipe (summary/sections)
     gut show <recipe> --json  Structured JSON output
     gut next [recipe]     Show next action to take
+    gut read <recipe>     📖  Read recipe/prep with pretty formatting
+    gut read <recipe> --prep  Read prep file
+    gut read pantry       Read project context
     gut questions         List open questions
     gut answer            Answer a question
     gut step              Manage plan steps
@@ -3368,6 +3380,225 @@ cmd_next() {
     fi
 }
 
+cmd_read() {
+    gut_check_init
+
+    local target=""
+    local show_prep=0
+    local no_colors=0
+    local no_paging=0
+
+    # Check for help first
+    if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        echo "Usage: gut read <recipe|pantry|context> [options]"
+        echo ""
+        echo "Read and display gut markdown files with pretty formatting"
+        echo ""
+        echo "Options:"
+        echo "  --prep, -p      Show prep file instead of recipe"
+        echo "  --plain         Disable colors"
+        echo "  --full, -f      No paging, print full content"
+        echo ""
+        echo "Examples:"
+        echo "  gut read my-feature"
+        echo "  gut read my-feature --prep"
+        echo "  gut read pantry"
+        echo "  gut read context"
+        return 0
+    fi
+
+    target="$1"
+    shift || true
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --prep|-p)
+                show_prep=1
+                ;;
+            --plain)
+                no_colors=1
+                ;;
+            --full|-f)
+                no_paging=1
+                ;;
+            *)
+                gut_error "Unknown flag: $1. Use --help for usage."
+                ;;
+        esac
+        shift
+    done
+
+    # Resolve file path
+    local file_path=""
+    local file_type="recipe"
+
+    if [[ -z "$target" ]]; then
+        gut_error "Usage: gut read <recipe|pantry|context> [--prep] [--plain] [--full]"
+    fi
+
+    # Special targets
+    case "$target" in
+        pantry|context)
+            file_path="$GUT_PANTRY/context.md"
+            file_type="pantry"
+            ;;
+        conventions)
+            file_path="$GUT_PANTRY/conventions.md"
+            file_type="pantry"
+            ;;
+        *)
+            # Try recipe or prep
+            if [[ $show_prep -eq 1 ]]; then
+                file_path="$GUT_PREP/${target}.md"
+                file_type="prep"
+            else
+                file_path="$GUT_RECIPES/${target}.md"
+                file_type="recipe"
+            fi
+            ;;
+    esac
+
+    # Check file exists
+    if [[ ! -f "$file_path" ]]; then
+        gut_error "File not found: $file_path"
+        echo ""
+        gut_print "Suggestions:"
+
+        # Suggest alternatives
+        if [[ $file_type == "recipe" ]]; then
+            local prep_file="$GUT_PREP/${target}.md"
+            if [[ -f "$prep_file" ]]; then
+                gut_print "  • Try: ${CYAN}gut read $target --prep${NC}"
+            fi
+        elif [[ $file_type == "prep" ]]; then
+            local recipe_file="$GUT_RECIPES/${target}.md"
+            if [[ -f "$recipe_file" ]]; then
+                gut_print "  • Try: ${CYAN}gut read $target${NC} (without --prep)"
+            fi
+        fi
+
+        gut_print "  • List recipes: ${CYAN}gut menu${NC}"
+        return 1
+    fi
+
+    # Check for bat
+    local use_bat=0
+    if command -v bat &> /dev/null && [[ $no_colors -eq 0 ]]; then
+        use_bat=1
+    fi
+
+    # Render the file
+    if [[ $use_bat -eq 1 ]]; then
+        # Use bat with warm theme
+        if [[ $no_paging -eq 1 ]]; then
+            bat --style=plain --color=always --theme="Monokai Extended" "$file_path"
+        else
+            bat --style=header,grid --color=always --theme="Monokai Extended" --paging=always "$file_path"
+        fi
+    else
+        # Custom renderer
+        local content=""
+        if [[ $no_colors -eq 1 ]]; then
+            content=$(cat "$file_path")
+        else
+            content=$(render_markdown "$file_path")
+        fi
+
+        # Output
+        if [[ $no_paging -eq 1 ]] || [[ $(echo "$content" | wc -l) -lt 40 ]]; then
+            echo "$content"
+        else
+            # Pipe through less
+            echo "$content" | less -R
+        fi
+    fi
+}
+
+render_markdown() {
+    local file="$1"
+    local in_code_block=0
+    local line_num=0
+
+    # Generate TOC
+    echo -e "${ORANGE}${BOLD}━━━ Table of Contents ━━━${NC}\n"
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^#\ (.+)$ ]]; then
+            local title="${BASH_REMATCH[1]}"
+            echo -e "  ${WARM_YELLOW}▸${NC} $title"
+        elif [[ "$line" =~ ^##\ (.+)$ ]]; then
+            local title="${BASH_REMATCH[1]}"
+            echo -e "    ${DIM}›${NC} $title"
+        fi
+    done < "$file"
+    echo -e "\n${ORANGE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+    # Render content
+    while IFS= read -r line; do
+        # Code blocks
+        if [[ "$line" =~ ^\`\`\`  ]]; then
+            if [[ $in_code_block -eq 0 ]]; then
+                in_code_block=1
+                echo -e "${DIM}╭─────${NC}"
+                continue
+            else
+                in_code_block=0
+                echo -e "${DIM}╰─────${NC}"
+                continue
+            fi
+        fi
+
+        if [[ $in_code_block -eq 1 ]]; then
+            echo -e "${DIM}│${NC} $line"
+            continue
+        fi
+
+        # Headers
+        if [[ "$line" =~ ^#\ (.+)$ ]]; then
+            echo -e "\n${ORANGE}${BOLD}# ${BASH_REMATCH[1]}${NC}\n"
+            continue
+        elif [[ "$line" =~ ^##\ (.+)$ ]]; then
+            echo -e "\n${ORANGE}## ${BASH_REMATCH[1]}${NC}\n"
+            continue
+        elif [[ "$line" =~ ^###\ (.+)$ ]]; then
+            echo -e "\n${WARM_YELLOW}### ${BASH_REMATCH[1]}${NC}\n"
+            continue
+        fi
+
+        # Lists
+        if [[ "$line" =~ ^-\ (.+)$ ]] || [[ "$line" =~ ^\*\ (.+)$ ]]; then
+            local item="${BASH_REMATCH[1]}"
+            # Handle checkboxes
+            if [[ "$item" =~ ^\[\ \]\ (.+)$ ]]; then
+                echo -e "  ${DIM}☐${NC} ${BASH_REMATCH[1]}"
+            elif [[ "$item" =~ ^\[x\]\ (.+)$ ]] || [[ "$item" =~ ^\[X\]\ (.+)$ ]]; then
+                echo -e "  ${GREEN}☑${NC} ${BASH_REMATCH[1]}"
+            else
+                echo -e "  ${WARM_YELLOW}•${NC} $item"
+            fi
+            continue
+        fi
+
+        # Bold text **text**
+        line=$(echo "$line" | sed -E "s/\*\*([^*]+)\*\*/${WARM_YELLOW}${BOLD}\1${NC}/g")
+
+        # Italic text _text_ or *text*
+        line=$(echo "$line" | sed -E "s/_([^_]+)_/${WARM_RED}\1${NC}/g")
+        line=$(echo "$line" | sed -E "s/\*([^*]+)\*/${WARM_RED}\1${NC}/g")
+
+        # Inline code - skip styling to avoid quote issues
+
+        # Horizontal rules
+        if [[ "$line" =~ ^---+$ ]] || [[ "$line" =~ ^\*\*\*+$ ]]; then
+            echo -e "${ORANGE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            continue
+        fi
+
+        # Regular line
+        echo -e "$line"
+    done < "$file"
+}
+
 #-----------------------------------------------------------------------------
 # Main
 #-----------------------------------------------------------------------------
@@ -3403,6 +3634,7 @@ main() {
         resume)      cmd_resume "$@" ;;
         show)        cmd_show "$@" ;;
         next)        cmd_next "$@" ;;
+        read)        cmd_read "$@" ;;
         context)     cmd_context "$@" ;;
         questions)   cmd_questions "$@" ;;
         answer)      cmd_answer "$@" ;;
