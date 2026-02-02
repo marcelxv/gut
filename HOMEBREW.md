@@ -3,7 +3,7 @@
 ## Quick Install (after tap is set up)
 
 ```bash
-brew tap anthropics/gut
+brew tap marcelxv/gut
 brew install gut
 ```
 
@@ -16,7 +16,7 @@ Homebrew formulas live in a separate "tap" repository. Here's how to set it up:
 Create a new GitHub repo named `homebrew-gut` under your organization:
 
 ```
-https://github.com/anthropics/homebrew-gut
+https://github.com/marcelxv/homebrew-gut
 ```
 
 ### 2. Add the formula
@@ -43,7 +43,7 @@ git push origin v0.1.0
 After creating the release, get the SHA256 of the tarball:
 
 ```bash
-curl -sL https://github.com/anthropics/gut-cli/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
+curl -sL https://github.com/marcelxv/gut-cli/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
 ```
 
 Update the `sha256` in `Formula/gut.rb` with this value.
@@ -59,7 +59,7 @@ brew install --build-from-source ./Formula/gut.rb
 Users can install directly from the main branch without a release:
 
 ```bash
-brew install --HEAD anthropics/gut/gut
+brew install --HEAD marcelxv/gut/gut
 ```
 
 ## Formula Location

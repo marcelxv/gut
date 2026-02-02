@@ -1,7 +1,7 @@
 # add-ai-friendly-display-commands
 
 ---
-status: cooking
+status: tasting
 branch: gut/add-ai-friendly-display-commands
 created: 2026-02-01 22:01:48
 author: Marcel Scognamiglio 
@@ -26,14 +26,16 @@ With smart display commands, AI agents can request exactly what they need (e.g.,
 
 ## Success Criteria
 
-- [ ] `gut show <recipe>` displays a smart summary (status, progress, approach, next steps)
-- [ ] `gut show <recipe> --json` outputs structured JSON for AI parsing
-- [ ] `gut show <recipe> approach|steps|files|risks|testing` extracts specific sections
-- [ ] `gut show <recipe> --full` shows complete prep file
-- [ ] `gut next [recipe]` shows the next uncompleted step with context
-- [ ] All commands work with existing prep file format
-- [ ] Commands handle missing files gracefully
-- [ ] Help text updated with new commands
+- [x] `gut show <recipe>` displays a smart summary (status, progress, approach, next steps)
+- [x] `gut show <recipe> --json` outputs structured JSON for AI parsing
+- [x] `gut show <recipe> approach|steps|files|risks|testing` extracts specific sections
+- [x] `gut show <recipe> --full` shows complete prep file
+- [x] `gut next [recipe]` shows the next uncompleted step with context
+- [x] All commands work with existing prep file format
+- [x] Commands handle missing files gracefully
+- [x] Help text updated with new commands
+- [x] Replace all "anthropics/gut-cli" references with "marcelxv/gut-cli"
+- [x] Restructure README: English as default, Portuguese as separate file (README.pt-BR.md)
 
 ## Context
 

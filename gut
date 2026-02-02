@@ -405,7 +405,7 @@ cmd_help() {
 
   Idioma: GUT_LANG=en para inglês, GUT_LANG=pt para português
 
-  Saiba mais: https://github.com/anthropics/gut-cli
+  Saiba mais: https://github.com/marcelxv/gut-cli
 
 EOF
     else
@@ -471,7 +471,7 @@ EOF
 
   Language: GUT_LANG=en for English, GUT_LANG=pt for Portuguese
 
-  Learn more: https://github.com/anthropics/gut-cli
+  Learn more: https://github.com/marcelxv/gut-cli
 
 EOF
     fi
@@ -1565,7 +1565,7 @@ cmd_serve() {
         fi
     fi
 
-    pr_body+="\n🧑‍🍳 Cooked with [gut](https://github.com/anthropics/gut-cli)"
+    pr_body+="\n🧑‍🍳 Cooked with [gut](https://github.com/marcelxv/gut-cli)"
 
     gut_print ""
     gut_print "Ready to serve: ${BOLD}$pr_title${NC}"
