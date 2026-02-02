@@ -252,6 +252,81 @@ get_active_branch_recipes() {
 }
 
 #-----------------------------------------------------------------------------
+# Prep/Recipe Display Helpers
+#-----------------------------------------------------------------------------
+
+# Extract a section from a markdown file between two headers
+extract_section() {
+    local file="$1"
+    local section="$2"
+
+    [[ ! -f "$file" ]] && return 1
+
+    # Map section names to markdown headers
+    local header=""
+    case "$section" in
+        approach) header="### Approach" ;;
+        steps) header="### Step-by-Step" ;;
+        files) header="### Files to Create/Modify" ;;
+        risks) header="### Risks & Considerations" ;;
+        testing) header="### Testing Strategy" ;;
+        dependencies) header="### Dependencies Needed" ;;
+        *) return 1 ;;
+    esac
+
+    # Extract section between header and next ### or ---
+    # First, find the line with the header
+    local in_section=false
+    local result=""
+
+    while IFS= read -r line; do
+        if [[ "$line" == "$header" ]]; then
+            in_section=true
+            continue
+        fi
+
+        if [[ "$in_section" == true ]]; then
+            # Stop at next header or section break
+            if [[ "$line" =~ ^### ]] || [[ "$line" =~ ^--- ]]; then
+                break
+            fi
+            # Skip empty lines at start, but keep them in middle
+            if [[ -n "$result" ]] || [[ -n "$line" ]]; then
+                result+="$line"$'\n'
+            fi
+        fi
+    done < "$file"
+
+    if [[ -n "$result" ]]; then
+        echo "$result"
+    else
+        echo "[Section not found or empty]"
+    fi
+}
+
+# Get text from a section (flatten to single line)
+extract_section_text() {
+    local file="$1"
+    local section="$2"
+    extract_section "$file" "$section" | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ //;s/ $//'
+}
+
+# Get first active (uncompleted) recipe on current branch
+get_active_recipe() {
+    local recipes=$(get_active_branch_recipes)
+    local first_recipe=$(echo "$recipes" | awk '{print $1}')
+    echo "$first_recipe"
+}
+
+# Get next uncompleted step from prep file
+get_next_step() {
+    local prep_file="$1"
+    [[ ! -f "$prep_file" ]] && return 1
+
+    grep -m1 "^[0-9]*\. \[ \]" "$prep_file" | sed 's/^[0-9]*\. \[ \] //'
+}
+
+#-----------------------------------------------------------------------------
 # Commands
 #-----------------------------------------------------------------------------
 
@@ -302,6 +377,9 @@ cmd_help() {
     gut status            Onde estamos? O que está cozinhando?
     gut resume            Continue de onde parou (handoff de IA)
     gut resume --json     Saída estruturada para agentes de IA
+    gut show <receita>    Exibir resumo inteligente de prep/receita
+    gut show <receita> --json  Saída JSON estruturada
+    gut next [receita]    Mostrar próxima ação a realizar
     gut questions         Listar perguntas em aberto
     gut answer            Responder uma pergunta
     gut step              Gerenciar passos do plano
@@ -327,7 +405,7 @@ cmd_help() {
 
   Idioma: GUT_LANG=en para inglês, GUT_LANG=pt para português
 
-  Saiba mais: https://github.com/anthropics/gut-cli
+  Saiba mais: https://github.com/marcelxv/gut-cli
 
 EOF
     else
@@ -365,6 +443,9 @@ EOF
     gut status            Where are we? What's cooking?
     gut resume            Pick up where you left off (for AI handoff)
     gut resume --json     Structured output for AI agents
+    gut show <recipe>     Smart display of prep/recipe (summary/sections)
+    gut show <recipe> --json  Structured JSON output
+    gut next [recipe]     Show next action to take
     gut questions         List open questions
     gut answer            Answer a question
     gut step              Manage plan steps
@@ -390,7 +471,7 @@ EOF
 
   Language: GUT_LANG=en for English, GUT_LANG=pt for Portuguese
 
-  Learn more: https://github.com/anthropics/gut-cli
+  Learn more: https://github.com/marcelxv/gut-cli
 
 EOF
     fi
@@ -1484,7 +1565,7 @@ cmd_serve() {
         fi
     fi
 
-    pr_body+="\n🧑‍🍳 Cooked with [gut](https://github.com/anthropics/gut-cli)"
+    pr_body+="\n🧑‍🍳 Cooked with [gut](https://github.com/marcelxv/gut-cli)"
 
     gut_print ""
     gut_print "Ready to serve: ${BOLD}$pr_title${NC}"
@@ -2223,8 +2304,10 @@ count_steps() {
     local done=0
 
     if [[ -f "$prep_file" ]]; then
-        total=$(grep -c '\[[[:space:]xX]\]' "$prep_file" 2>/dev/null || echo 0)
-        done=$(grep -c '\[[xX]\]' "$prep_file" 2>/dev/null || echo 0)
+        # grep -c outputs 0 when no matches, but returns exit code 1
+        # Don't use || echo 0 as it causes duplicate output
+        total=$(grep -c '\[[[:space:]xX]\]' "$prep_file" 2>/dev/null) || total=0
+        done=$(grep -c '\[[xX]\]' "$prep_file" 2>/dev/null) || done=0
     fi
 
     echo "$done/$total"
@@ -3109,6 +3192,182 @@ cmd_combine() {
     echo ""
 }
 
+cmd_show() {
+    gut_check_init
+
+    local slug=""
+    local section="summary"
+    local format="text"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json|-j)
+                format="json"
+                shift
+                ;;
+            --full|-f)
+                section="full"
+                shift
+                ;;
+            approach|steps|files|risks|testing|dependencies)
+                section="$1"
+                shift
+                ;;
+            *)
+                if [[ -z "$slug" ]]; then
+                    slug="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$slug" ]]; then
+        gut_error "Usage: gut show <recipe> [section] [--json|--full]"
+    fi
+
+    local prep_file="$GUT_PREP/${slug}.md"
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    # Check if files exist
+    if [[ ! -f "$prep_file" ]] && [[ ! -f "$recipe_file" ]]; then
+        gut_error "Recipe '$slug' not found. Run 'gut menu' to see recipes."
+    fi
+
+    # If no prep file, show recipe instead
+    if [[ ! -f "$prep_file" ]] && [[ "$section" != "full" ]]; then
+        gut_warn "No prep file yet for '$slug'"
+        gut_print ""
+        gut_print "Recipe: ${CYAN}.gut/recipes/${slug}.md${NC}"
+        gut_print ""
+        cat "$recipe_file"
+        return 0
+    fi
+
+    case "$section" in
+        summary)
+            if [[ "$format" == "json" ]]; then
+                # JSON output for AI parsing
+                local status=$(grep -m1 "^status:" "$recipe_file" 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+                local title=$(grep -m1 "^# " "$recipe_file" 2>/dev/null | sed 's/^# //' || echo "$slug")
+                local approach=$(extract_section_text "$prep_file" "approach")
+                local progress=$(count_steps "$prep_file")
+                local next_step=$(get_next_step "$prep_file" | sed 's/"/\\"/g')
+
+                echo "{"
+                echo "  \"slug\": \"$slug\","
+                echo "  \"title\": \"$title\","
+                echo "  \"status\": \"$status\","
+                echo "  \"progress\": \"$progress\","
+                echo "  \"approach\": \"$approach\","
+                echo "  \"next_step\": \"$next_step\","
+                echo "  \"prep_file\": \".gut/prep/${slug}.md\","
+                echo "  \"recipe_file\": \".gut/recipes/${slug}.md\""
+                echo "}"
+            else
+                # Human-readable summary
+                local title=$(grep -m1 "^# " "$recipe_file" 2>/dev/null | sed 's/^# //' || echo "$slug")
+                local status=$(grep -m1 "^status:" "$recipe_file" 2>/dev/null | cut -d' ' -f2 || echo "unknown")
+                local progress=$(count_steps "$prep_file")
+
+                gut_header "${PREP} $title"
+                gut_print "${BOLD}Status:${NC} $status"
+                gut_print "${BOLD}Progress:${NC} $progress steps"
+                echo ""
+
+                gut_print "${BOLD}Approach:${NC}"
+                extract_section "$prep_file" "approach" | head -5
+                echo ""
+
+                gut_print "${BOLD}Next steps:${NC}"
+                grep "^[0-9]*\. \[ \]" "$prep_file" 2>/dev/null | head -3 || gut_print "  No steps defined yet"
+                echo ""
+
+                gut_print "${CYAN}See more: gut show $slug [approach|steps|files|risks|testing|--full]${NC}"
+                echo ""
+            fi
+            ;;
+
+        approach|steps|files|risks|testing|dependencies)
+            if [[ "$format" == "json" ]]; then
+                local content=$(extract_section "$prep_file" "$section" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+                echo "{"
+                echo "  \"section\": \"$section\","
+                echo "  \"content\": \"$content\""
+                echo "}"
+            else
+                gut_header "${PREP} $slug: ${section}"
+                extract_section "$prep_file" "$section"
+                echo ""
+            fi
+            ;;
+
+        full)
+            cat "$prep_file"
+            ;;
+
+        *)
+            gut_error "Unknown section: $section. Try: summary, approach, steps, files, risks, testing, full"
+            ;;
+    esac
+}
+
+cmd_next() {
+    gut_check_init
+
+    local slug="$1"
+
+    # If no slug provided, try to get active recipe
+    if [[ -z "$slug" ]]; then
+        slug=$(get_active_recipe)
+        if [[ -z "$slug" ]]; then
+            gut_error "No active recipe. Specify: gut next <recipe>"
+        fi
+    fi
+
+    local prep_file="$GUT_PREP/${slug}.md"
+    local recipe_file="$GUT_RECIPES/${slug}.md"
+
+    if [[ ! -f "$prep_file" ]]; then
+        if [[ -f "$recipe_file" ]]; then
+            gut_warn "No prep file yet for '$slug'"
+            gut_print ""
+            gut_print "Next: ${CYAN}gut prep $slug${NC}"
+        else
+            gut_error "Recipe '$slug' not found. Run 'gut menu' to see recipes."
+        fi
+        return 0
+    fi
+
+    gut_header "🔥 Next Action: $slug"
+
+    # Find first unchecked step
+    local next_step=$(get_next_step "$prep_file")
+
+    if [[ -z "$next_step" ]]; then
+        gut_success "All steps completed!"
+        gut_print ""
+        gut_print "Next: ${BOLD}${CYAN}gut taste $slug${NC}"
+        echo ""
+    else
+        gut_print "${BOLD}$next_step${NC}"
+        echo ""
+
+        # Show relevant context
+        local progress=$(count_steps "$prep_file")
+        gut_print "${CYAN}Progress: $progress${NC}"
+        echo ""
+
+        gut_print "${BOLD}Approach:${NC}"
+        extract_section "$prep_file" "approach" | head -3
+        echo ""
+
+        gut_print "${CYAN}Full plan: gut show $slug${NC}"
+        echo ""
+    fi
+}
+
 #-----------------------------------------------------------------------------
 # Main
 #-----------------------------------------------------------------------------
@@ -3142,6 +3401,8 @@ main() {
         pantry)      cmd_pantry "$@" ;;
         status)      cmd_status "$@" ;;
         resume)      cmd_resume "$@" ;;
+        show)        cmd_show "$@" ;;
+        next)        cmd_next "$@" ;;
         context)     cmd_context "$@" ;;
         questions)   cmd_questions "$@" ;;
         answer)      cmd_answer "$@" ;;
