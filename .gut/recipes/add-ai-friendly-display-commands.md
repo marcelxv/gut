@@ -1,7 +1,7 @@
 # add-ai-friendly-display-commands
 
 ---
-status: tasting
+status: served
 branch: gut/add-ai-friendly-display-commands
 created: 2026-02-01 22:01:48
 author: Marcel Scognamiglio 

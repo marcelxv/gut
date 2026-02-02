@@ -1,7 +1,7 @@
 # add terminal markdown reader
 
 ---
-status: cooking
+status: served
 branch: gut/add-ai-friendly-display-commands
 created: 2026-02-02 15:04:02
 author: Marcel Scognamiglio 
@@ -38,17 +38,17 @@ A dedicated terminal reader improves solo developer productivity and makes gut f
 
 ## Success Criteria
 
-- [ ] `gut read <recipe>` displays recipe with warm, food-themed colors
-- [ ] Defaults to recipe file, `--prep` flag shows prep file
-- [ ] Minimal section navigation: TOC at top, use `less` search to jump
-- [ ] `gut read pantry` or `gut read context` shows pantry files
-- [ ] Auto-detect and use `bat` if available, fallback to custom rendering
-- [ ] Custom rendering uses warm colors (orange headers, yellow highlights)
-- [ ] Support `--plain` (no colors), `--full` (no paging)
-- [ ] Pipe through `less -R` for paging and color support
-- [ ] File-not-found errors are friendly and suggest alternatives
-- [ ] `gut read --help` documents all options
-- [ ] Works completely offline (no external dependencies required)
+- [x] `gut read <recipe>` displays recipe with warm, food-themed colors
+- [x] Defaults to recipe file, `--prep` flag shows prep file
+- [x] Minimal section navigation: TOC at top, use `less` search to jump
+- [x] `gut read pantry` or `gut read context` shows pantry files
+- [x] Auto-detect and use `bat` if available, fallback to custom rendering
+- [x] Custom rendering uses warm colors (orange headers, yellow highlights)
+- [x] Support `--plain` (no colors), `--full` (no paging)
+- [x] Pipe through `less -R` for paging and color support
+- [x] File-not-found errors are friendly and suggest alternatives
+- [x] `gut read --help` documents all options
+- [x] Works completely offline (no external dependencies required)
 
 ## Context
 

@@ -378,6 +378,7 @@ cmd_help() {
   GERENCIAMENTO DA COZINHA:
 
     gut init              Configurar a cozinha no repo atual
+    gut init --track      Configurar sem adicionar .gut/ ao .gitignore
     gut menu              Listar todas as receitas e seus status
     gut pantry            Gerenciar contexto do projeto (IA lê isso)
     gut status            Onde estamos? O que está cozinhando?
@@ -394,6 +395,7 @@ cmd_help() {
     gut step              Gerenciar passos do plano
     gut context           Exportar contexto para IA (clipboard)
     gut spoiled           Encontrar receitas abandonadas
+    gut update            Atualizar gut para última versão (apenas instalações git)
 
   MODOS DE IA:
 
@@ -447,6 +449,7 @@ EOF
   KITCHEN MANAGEMENT:
 
     gut init              Set up the kitchen in current repo
+    gut init --track      Set up without adding .gut/ to .gitignore
     gut menu              List all recipes and their status
     gut pantry            Manage project context (AI reads this)
     gut status            Where are we? What's cooking?
@@ -463,6 +466,7 @@ EOF
     gut step              Manage plan steps
     gut context           Dump all context for AI (clipboard)
     gut spoiled           Find stale/abandoned recipes
+    gut update            Update gut to latest version (git installs only)
 
   AI MODES:
 
@@ -490,6 +494,22 @@ EOF
 }
 
 cmd_init() {
+    local track_gut_files=0
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --track)
+                track_gut_files=1
+                shift
+                ;;
+            *)
+                gut_error "Unknown flag: $1. Use 'gut init [--track]'"
+                return 1
+                ;;
+        esac
+    done
+
     gut_header "${CHEF} $(t setting_up)"
 
     # Check if git is initialized
@@ -533,8 +553,8 @@ build/
 .DS_Store
 Thumbs.db
 
-# gut workflow
-.gut/prep/drafts/
+# gut workflow (added by gut init)
+.gut/
 GITIGNORE
                 gut_success "Created .gitignore"
             fi
@@ -727,11 +747,24 @@ EOF
 #     check: "npm --version"
 EOF
 
-    # Create .gitignore additions
-    if [[ -f ".gitignore" ]]; then
-        if ! grep -q ".gut/prep" .gitignore 2>/dev/null; then
-            echo -e "\n# gut - AI workflow\n.gut/prep/drafts/" >> .gitignore
+    # Add .gut/ to .gitignore (unless --track flag)
+    if [[ $track_gut_files -eq 0 ]]; then
+        if [[ -f ".gitignore" ]]; then
+            # Check if .gut/ already in gitignore
+            if ! grep -q "^\.gut/" .gitignore 2>/dev/null; then
+                echo -e "\n# gut workflow files (added by gut init)\n.gut/" >> .gitignore
+                gut_success "Added .gut/ to .gitignore"
+            fi
+        else
+            # Create .gitignore with .gut/ entry
+            cat > ".gitignore" << 'GITIGNORE'
+# gut workflow files (added by gut init)
+.gut/
+GITIGNORE
+            gut_success "Created .gitignore with .gut/ entry"
         fi
+    else
+        gut_warn ".gut/ files will be tracked (--track mode)"
     fi
 
     gut_success "$(t kitchen_initialized)"
@@ -3599,6 +3632,82 @@ render_markdown() {
     done < "$file"
 }
 
+cmd_update() {
+    gut_header "🔄 Updating gut..."
+
+    # Find the gut script directory
+    local script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+    # Resolve symlinks
+    while [[ -L "$script_path" ]]; do
+        local link_target=$(readlink "$script_path")
+        if [[ "$link_target" == /* ]]; then
+            script_path="$link_target"
+        else
+            script_path="$(cd "$(dirname "$script_path")" && pwd)/$(basename "$link_target")"
+        fi
+    done
+
+    local gut_dir="$(cd "$(dirname "$script_path")" && pwd)"
+
+    # Check if this is a git repository
+    if [[ ! -d "$gut_dir/.git" ]]; then
+        gut_error "gut is not installed from git repository"
+        echo ""
+        gut_print "To update gut:"
+        gut_print "  • Homebrew: ${CYAN}brew upgrade gut${NC}"
+        gut_print "  • Manual: Download latest from GitHub and reinstall"
+        echo ""
+        return 1
+    fi
+
+    # Check for uncommitted changes
+    cd "$gut_dir"
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+        gut_warn "You have uncommitted changes in the gut repository"
+        gut_print ""
+        read -p "Continue with update? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            gut_print "Update cancelled"
+            return 0
+        fi
+    fi
+
+    # Get current commit
+    local current_commit=$(git rev-parse --short HEAD 2>/dev/null)
+    local current_branch=$(git branch --show-current 2>/dev/null)
+
+    gut_print "Current: ${CYAN}$current_branch @ $current_commit${NC}"
+    echo ""
+
+    # Pull latest changes
+    gut_print "Pulling latest changes..."
+    if git pull --ff-only 2>&1; then
+        local new_commit=$(git rev-parse --short HEAD 2>/dev/null)
+
+        if [[ "$current_commit" == "$new_commit" ]]; then
+            gut_success "Already up-to-date!"
+        else
+            gut_success "Updated to ${CYAN}$new_commit${NC}"
+            echo ""
+            gut_print "Changes:"
+            git log --oneline --no-decorate "$current_commit..$new_commit" | head -5
+            echo ""
+        fi
+    else
+        gut_error "Failed to update"
+        echo ""
+        gut_print "This might be due to:"
+        gut_print "  • Network issues"
+        gut_print "  • Merge conflicts"
+        gut_print "  • Diverged branches"
+        echo ""
+        gut_print "Try manually: ${CYAN}cd $gut_dir && git pull${NC}"
+        return 1
+    fi
+}
+
 #-----------------------------------------------------------------------------
 # Main
 #-----------------------------------------------------------------------------
@@ -3644,6 +3753,7 @@ main() {
 
         # Meta
         version|-v|--version) cmd_version ;;
+        update) cmd_update ;;
         help|-h|--help) cmd_help ;;
         *)
             gut_error "Unknown command: $cmd. Run 'gut help' for usage."
