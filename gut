@@ -61,6 +61,10 @@ t() {
             step_done) echo "Passo marcado como concluído!" ;;
             pending_steps) echo "Passos Pendentes" ;;
             progress) echo "Progresso" ;;
+            obsidian_generating) echo "Gerando vault Obsidian..." ;;
+            obsidian_refreshing) echo "Regenerando vault Obsidian..." ;;
+            obsidian_done) echo "Vault Obsidian gerado!" ;;
+            obsidian_open) echo "Abrindo no Obsidian..." ;;
             resume_title) echo "Continue de onde parou" ;;
             branch_label) echo "Branch" ;;
             recipes_branch) echo "Receitas neste branch" ;;
@@ -94,6 +98,10 @@ t() {
             step_done) echo "Step marked as done!" ;;
             pending_steps) echo "Pending Steps" ;;
             progress) echo "Progress" ;;
+            obsidian_generating) echo "Generating Obsidian vault..." ;;
+            obsidian_refreshing) echo "Regenerating Obsidian vault..." ;;
+            obsidian_done) echo "Obsidian vault generated!" ;;
+            obsidian_open) echo "Opening in Obsidian..." ;;
             resume_title) echo "Pick up where you left off" ;;
             branch_label) echo "Branch" ;;
             recipes_branch) echo "Recipes on this branch" ;;
@@ -395,6 +403,9 @@ cmd_help() {
     gut step              Gerenciar passos do plano
     gut context           Exportar contexto para IA (clipboard)
     gut spoiled           Encontrar receitas abandonadas
+    gut obsidian          📦  Exportar .gut/ como vault Obsidian
+    gut obsidian --refresh    Regenerar após mudanças
+    gut obsidian --open       Gerar + abrir no Obsidian
     gut update            Atualizar gut para última versão (apenas instalações git)
 
   MODOS DE IA:
@@ -466,6 +477,9 @@ EOF
     gut step              Manage plan steps
     gut context           Dump all context for AI (clipboard)
     gut spoiled           Find stale/abandoned recipes
+    gut obsidian          📦  Export .gut/ as Obsidian vault
+    gut obsidian --refresh    Regenerate after changes
+    gut obsidian --open       Generate + open in Obsidian
     gut update            Update gut to latest version (git installs only)
 
   AI MODES:
@@ -1616,8 +1630,11 @@ cmd_serve() {
     gut_print "Ready to serve: ${BOLD}$pr_title${NC}"
     gut_print ""
 
+    local should_plate=true
+
     if is_git_repo; then
-        local default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+        local default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+        [[ -z "$default_branch" ]] && default_branch="main"
 
         gut_print "Branch: $current_branch → $default_branch"
         gut_print ""
@@ -1650,28 +1667,37 @@ Implements recipes: ${commit_recipes%, }"
                 gut_warn "GitHub CLI (gh) not found. Create PR manually."
                 gut_print "Push complete. Create PR at your repo's GitHub page."
             fi
+        else
+            gut_print ""
+            read -p "Mark recipes as served anyway? [y/N] " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                should_plate=false
+                gut_warn "Recipes not marked as served. Run 'gut serve' again when ready."
+                return 0
+            fi
         fi
     else
         gut_warn "Not a git repo. Skipping PR creation."
     fi
 
-    # Update status and move to plated for all recipes
-    for recipe_slug in "${recipes_to_serve[@]}"; do
-        local recipe_file="$GUT_RECIPES/${recipe_slug}.md"
-        sed -i.bak 's/^status: [a-z]*/status: served/' "$recipe_file" && rm -f "${recipe_file}.bak"
+    if [[ "$should_plate" == true ]]; then
+        for recipe_slug in "${recipes_to_serve[@]}"; do
+            local recipe_file="$GUT_RECIPES/${recipe_slug}.md"
+            sed -i.bak 's/^status: [a-z]*/status: served/' "$recipe_file" && rm -f "${recipe_file}.bak"
 
-        # Copy to plated for history
-        local plated_file="$GUT_PLATED/$(datestamp)-${recipe_slug}.md"
-        cp "$recipe_file" "$plated_file"
-    done
+            local plated_file="$GUT_PLATED/$(datestamp)-${recipe_slug}.md"
+            cp "$recipe_file" "$plated_file"
+        done
 
-    gut_success "Recipes served! ${FIRE}"
-    gut_print ""
-    gut_print "Plated ${#recipes_to_serve[@]} recipe(s) to: ${CYAN}$GUT_PLATED/${NC}"
-    gut_print ""
-    gut_print "${BOLD}━━━ Next ━━━${NC}"
-    gut_print "  ${CYAN}git checkout main${NC}          - return to main branch"
-    gut_print "  ${CYAN}gut recipe -a \"next feature\"${NC} - start something new"
+        gut_success "Recipes served! ${FIRE}"
+        gut_print ""
+        gut_print "Plated ${#recipes_to_serve[@]} recipe(s) to: ${CYAN}$GUT_PLATED/${NC}"
+        gut_print ""
+        gut_print "${BOLD}━━━ Next ━━━${NC}"
+        gut_print "  ${CYAN}git checkout main${NC}          - return to main branch"
+        gut_print "  ${CYAN}gut recipe -a \"next feature\"${NC} - start something new"
+    fi
     echo ""
 }
 
@@ -3632,6 +3658,539 @@ render_markdown() {
     done < "$file"
 }
 
+#-----------------------------------------------------------------------------
+# Obsidian Export
+#-----------------------------------------------------------------------------
+
+obsidian_get_project_name() {
+    local name=""
+    if is_git_repo; then
+        name=$(git remote get-url origin 2>/dev/null | sed 's/.*\///' | sed 's/\.git$//')
+    fi
+    if [[ -z "$name" ]]; then
+        name=$(basename "$(pwd)")
+    fi
+    echo "$name"
+}
+
+obsidian_count_checkboxes() {
+    local file="$1"
+    local done_count=0
+    local total=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]\[x\] ]]; then
+            ((done_count++))
+            ((total++))
+        elif [[ "$line" =~ ^[[:space:]]*-[[:space:]]\[[[:space:]]\] ]]; then
+            ((total++))
+        fi
+    done < "$file"
+    echo "$done_count $total"
+}
+
+obsidian_progress_bar() {
+    local done_count=$1
+    local total=$2
+    if [[ $total -eq 0 ]]; then
+        echo "—"
+        return
+    fi
+    local pct=$((done_count * 100 / total))
+    local filled=$((pct / 10))
+    local empty=$((10 - filled))
+    local bar=""
+    local i
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    echo "$bar $pct% ($done_count/$total)"
+}
+
+obsidian_skip_frontmatter() {
+    local in_fm=0
+    local fm_done=0
+    local first_line=1
+    while IFS= read -r line; do
+        if [[ $first_line -eq 1 ]]; then
+            first_line=0
+            if [[ "$line" == "---" ]]; then
+                in_fm=1
+                continue
+            fi
+        fi
+        if [[ $in_fm -eq 1 ]] && [[ $fm_done -eq 0 ]]; then
+            if [[ "$line" == "---" ]]; then
+                fm_done=1
+                continue
+            fi
+            continue
+        fi
+        echo "$line"
+    done
+}
+
+obsidian_enrich_recipe() {
+    local src="$1"
+    local dest="$2"
+    local project="$3"
+    local slug=$(basename "$src" .md)
+
+    local rstatus=$(grep -m1 "^status:" "$src" 2>/dev/null | sed 's/status: *//')
+    local created=$(grep -m1 "^created:" "$src" 2>/dev/null | sed 's/created: *//')
+    local author=$(grep -m1 "^author:" "$src" 2>/dev/null | sed 's/author: *//')
+    local branch=$(grep -m1 "^branch:" "$src" 2>/dev/null | sed 's/branch: *//')
+
+    {
+        echo "---"
+        echo "project: $project"
+        echo "type: recipe"
+        echo "tags:"
+        echo "  - gut/recipe"
+        echo "  - gut/status/$rstatus"
+        [[ -n "$created" ]] && echo "created: $created"
+        [[ -n "$author" ]] && echo "author: \"$author\""
+        [[ -n "$branch" ]] && echo "branch: $branch"
+        echo "status: $rstatus"
+        echo "---"
+        echo ""
+        obsidian_skip_frontmatter < "$src"
+        echo ""
+        echo "---"
+        echo ""
+        echo "## See Also"
+        echo ""
+        [[ -f "$GUT_PREP/${slug}.md" ]] && echo "- [[prep/${slug}|Prep: ${slug}]]"
+        for p in "$GUT_PLATED"/*"-${slug}.md"; do
+            [[ -f "$p" ]] && echo "- [[plated/$(basename "$p" .md)|Plated: $(basename "$p" .md)]]"
+        done
+        echo "- [[pantry/context|Project Context]]"
+        echo "- [[pantry/conventions|Conventions]]"
+        echo "- [[Dashboard]]"
+        echo "- [[Recipe Board]]"
+    } > "$dest"
+}
+
+obsidian_enrich_prep() {
+    local src="$1"
+    local dest="$2"
+    local project="$3"
+    local slug=$(basename "$src" .md)
+
+    local recipe_ref=$(grep -m1 "^recipe:" "$src" 2>/dev/null | sed 's/recipe: *//')
+    local created=$(grep -m1 "^created:" "$src" 2>/dev/null | sed 's/created: *//')
+
+    {
+        echo "---"
+        echo "project: $project"
+        echo "type: prep"
+        echo "tags:"
+        echo "  - gut/prep"
+        [[ -n "$recipe_ref" ]] && echo "recipe: $recipe_ref"
+        [[ -n "$created" ]] && echo "created: $created"
+        echo "---"
+        echo ""
+        obsidian_skip_frontmatter < "$src"
+        echo ""
+        echo "---"
+        echo ""
+        echo "## See Also"
+        echo ""
+        [[ -n "$recipe_ref" ]] && echo "- [[recipes/${recipe_ref}|Recipe: ${recipe_ref}]]"
+        echo "- [[pantry/context|Project Context]]"
+        echo "- [[pantry/conventions|Conventions]]"
+        echo "- [[Dashboard]]"
+    } > "$dest"
+}
+
+obsidian_enrich_note() {
+    local src="$1"
+    local dest="$2"
+    local project="$3"
+    local note_type="$4"
+    local slug=$(basename "$src" .md)
+
+    {
+        echo "---"
+        echo "project: $project"
+        echo "type: $note_type"
+        echo "tags:"
+        echo "  - gut/$note_type"
+        echo "---"
+        echo ""
+        obsidian_skip_frontmatter < "$src"
+        echo ""
+        echo "---"
+        echo ""
+        echo "## See Also"
+        echo ""
+        echo "- [[Dashboard]]"
+        if [[ "$note_type" == "plated" ]]; then
+            local plated_name=$(basename "$src" .md)
+            local recipe_slug="${plated_name#*-}"
+            [[ -f "$GUT_RECIPES/${recipe_slug}.md" ]] && echo "- [[recipes/${recipe_slug}|Recipe: ${recipe_slug}]]"
+            [[ -f "$GUT_PREP/${recipe_slug}.md" ]] && echo "- [[prep/${recipe_slug}|Prep: ${recipe_slug}]]"
+        fi
+    } > "$dest"
+}
+
+obsidian_generate_dashboard() {
+    local dest="$1"
+    local project="$2"
+
+    local recipe_count=0
+    local cooking_count=0
+    local served_count=0
+
+    {
+        echo "---"
+        echo "project: $project"
+        echo "type: hub"
+        echo "tags:"
+        echo "  - gut/hub"
+        echo "  - gut/dashboard"
+        echo "---"
+        echo ""
+        echo "# 🧑‍🍳 ${project} — gut Dashboard"
+        echo ""
+        echo "> [!info] Auto-generated by \`gut obsidian\`"
+        echo "> Regenerate with \`gut obsidian --refresh\`"
+        echo ""
+        echo "## Kitchen Overview"
+        echo ""
+        echo "| Recipe | Status | Progress |"
+        echo "|--------|--------|----------|"
+
+        for recipe in "$GUT_RECIPES"/*.md; do
+            [[ -f "$recipe" ]] || continue
+            local rname=$(basename "$recipe" .md)
+            local rstatus=$(grep -m1 "^status:" "$recipe" 2>/dev/null | sed 's/status: *//')
+            local counts=$(obsidian_count_checkboxes "$recipe")
+            local rdone=$(echo "$counts" | cut -d' ' -f1)
+            local rtotal=$(echo "$counts" | cut -d' ' -f2)
+            local rprog=$(obsidian_progress_bar "$rdone" "$rtotal")
+            echo "| [[recipes/${rname}\\|${rname}]] | \`${rstatus}\` | ${rprog} |"
+            ((recipe_count++))
+            [[ "$rstatus" == "cooking" ]] && ((cooking_count++))
+            [[ "$rstatus" == "served" ]] && ((served_count++))
+        done
+
+        echo ""
+        echo "**Total:** ${recipe_count} recipes — ${cooking_count} cooking, ${served_count} served"
+        echo ""
+
+        echo "## Recipe Map"
+        echo ""
+        echo '```mermaid'
+        echo "graph LR"
+        for recipe in "$GUT_RECIPES"/*.md; do
+            [[ -f "$recipe" ]] || continue
+            local rname=$(basename "$recipe" .md)
+            local rstatus=$(grep -m1 "^status:" "$recipe" 2>/dev/null | sed 's/status: *//')
+            local node_id=$(echo "$rname" | tr '-' '_')
+            case "$rstatus" in
+                draft)    echo "    ${node_id}[\"${rname}\"]:::draft" ;;
+                prepped)  echo "    ${node_id}[\"${rname}\"]:::prepped" ;;
+                cooking)  echo "    ${node_id}[\"${rname}\"]:::cooking" ;;
+                tasting)  echo "    ${node_id}[\"${rname}\"]:::tasting" ;;
+                served)   echo "    ${node_id}[\"${rname}\"]:::served" ;;
+                spoiled)  echo "    ${node_id}[\"${rname}\"]:::spoiled" ;;
+                *)        echo "    ${node_id}[\"${rname}\"]" ;;
+            esac
+        done
+        echo "    classDef draft fill:#9e9e9e,color:#fff"
+        echo "    classDef prepped fill:#2196f3,color:#fff"
+        echo "    classDef cooking fill:#ff9800,color:#fff"
+        echo "    classDef tasting fill:#9c27b0,color:#fff"
+        echo "    classDef served fill:#4caf50,color:#fff"
+        echo "    classDef spoiled fill:#f44336,color:#fff"
+        echo '```'
+        echo ""
+
+        echo "## Quick Links"
+        echo ""
+        echo "- [[Recipe Board]] — All recipes grouped by status"
+        echo "- [[AI Modes]] — Planned, Reactive, Emergency"
+        echo "- [[pantry/context|Project Context]]"
+        echo "- [[pantry/conventions|Conventions]]"
+
+        echo ""
+        echo "## Directory Map"
+        echo ""
+        echo "| Folder | Contents |"
+        echo "|--------|----------|"
+        echo "| \`recipes/\` | What to build (specs) |"
+        echo "| \`prep/\` | How to build it (plans) |"
+        echo "| \`plated/\` | Completed work (records) |"
+        echo "| \`pantry/\` | Project context & conventions |"
+        echo "| \`modes/\` | AI behavior modes |"
+        [[ -d "$GUT_SEASONING" ]] && echo "| \`seasoning/\` | Quick adjustments log |"
+        [[ -d "$GUT_FLAME" ]] && echo "| \`flame/\` | Emergency fix logs |"
+    } > "$dest"
+}
+
+obsidian_generate_recipe_board() {
+    local dest="$1"
+    local project="$2"
+
+    {
+        echo "---"
+        echo "project: $project"
+        echo "type: hub"
+        echo "tags:"
+        echo "  - gut/hub"
+        echo "  - gut/recipe-board"
+        echo "---"
+        echo ""
+        echo "# 📋 Recipe Board"
+        echo ""
+        echo "> [!info] Auto-generated by \`gut obsidian\`"
+        echo ""
+
+        local st
+        for st in cooking tasting prepped draft served spoiled; do
+            local icon callout
+            case "$st" in
+                cooking) icon="🍳"; callout="warning" ;;
+                tasting) icon="👅"; callout="question" ;;
+                prepped) icon="🥗"; callout="info" ;;
+                draft)   icon="📝"; callout="note" ;;
+                served)  icon="🍽️"; callout="success" ;;
+                spoiled) icon="🗑️"; callout="danger" ;;
+            esac
+
+            local found=0
+            local section=""
+            local st_upper=$(echo "$st" | tr '[:lower:]' '[:upper:]')
+            for recipe in "$GUT_RECIPES"/*.md; do
+                [[ -f "$recipe" ]] || continue
+                local rname=$(basename "$recipe" .md)
+                local rstatus=$(grep -m1 "^status:" "$recipe" 2>/dev/null | sed 's/status: *//')
+                if [[ "$rstatus" == "$st" ]]; then
+                    if [[ $found -eq 0 ]]; then
+                        section="> [!${callout}] ${icon} ${st_upper}"
+                        found=1
+                    fi
+                    local counts=$(obsidian_count_checkboxes "$recipe")
+                    local rdone=$(echo "$counts" | cut -d' ' -f1)
+                    local rtotal=$(echo "$counts" | cut -d' ' -f2)
+                    local rprog=$(obsidian_progress_bar "$rdone" "$rtotal")
+                    section+=$'\n'"> - [[recipes/${rname}|${rname}]] — ${rprog}"
+                fi
+            done
+
+            if [[ $found -eq 1 ]]; then
+                echo "$section"
+                echo ""
+            fi
+        done
+
+        echo "---"
+        echo ""
+        echo "## See Also"
+        echo ""
+        echo "- [[Dashboard]]"
+        echo "- [[AI Modes]]"
+    } > "$dest"
+}
+
+obsidian_generate_ai_modes() {
+    local dest="$1"
+    local project="$2"
+
+    {
+        echo "---"
+        echo "project: $project"
+        echo "type: hub"
+        echo "tags:"
+        echo "  - gut/hub"
+        echo "  - gut/ai-modes"
+        echo "---"
+        echo ""
+        echo "# 🤖 AI Modes"
+        echo ""
+        echo "> [!info] Auto-generated by \`gut obsidian\`"
+        echo ""
+        echo "## Mode Comparison"
+        echo ""
+        echo "| | Planned | Reactive | Emergency |"
+        echo "|---|---------|----------|-----------|"
+        echo "| **Trigger** | \`gut cook\` | \`gut season\` | \`gut flame\` |"
+        echo "| **Context** | Full (pantry + recipe + prep) | Minimal | Minimal |"
+        echo "| **Approach** | Follow the plan | Surgical fix | Fix it NOW |"
+        echo "| **Commits** | \`feat:\` / \`fix:\` | \`fix:\` | \`hotfix:\` |"
+        echo "| **Tests** | Write new tests | Run existing | Skip |"
+        echo "| **Docs** | Update | Skip | Skip |"
+        echo ""
+        echo '```mermaid'
+        echo "flowchart TD"
+        echo '    START{"What needs doing?"}'
+        echo '    START -->|"New feature / spec exists"| PLANNED["🍳 Planned Mode"]'
+        echo '    START -->|"Quick fix needed"| REACTIVE["🧂 Reactive Mode"]'
+        echo '    START -->|"Production is down!"| EMERGENCY["🔥 Emergency Mode"]'
+        echo '    PLANNED -->|"gut recipe → prep → cook"| DONE["✅ Done"]'
+        echo '    REACTIVE -->|"gut season"| DONE'
+        echo '    EMERGENCY -->|"gut flame"| DONE'
+        echo '```'
+        echo ""
+        echo "## Individual Modes"
+        echo ""
+        local mode
+        for mode in planned reactive emergency; do
+            if [[ -f "$GUT_MODES/${mode}.md" ]]; then
+                local mode_cap="$(echo "${mode:0:1}" | tr '[:lower:]' '[:upper:]')${mode:1}"
+                echo "- [[modes/${mode}|${mode_cap} Mode]]"
+            fi
+        done
+        echo ""
+        echo "---"
+        echo ""
+        echo "## See Also"
+        echo ""
+        echo "- [[Dashboard]]"
+        echo "- [[Recipe Board]]"
+    } > "$dest"
+}
+
+cmd_obsidian() {
+    gut_check_init
+
+    local refresh=false
+    local open_after=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --refresh|-r) refresh=true; shift ;;
+            --open|-o) open_after=true; shift ;;
+            *)
+                gut_error "Unknown flag: $1. Usage: gut obsidian [--refresh] [--open]"
+                return 1
+                ;;
+        esac
+    done
+
+    local obsidian_dir="$GUT_DIR/obsidian"
+    local project=$(obsidian_get_project_name)
+
+    if [[ "$refresh" == true ]]; then
+        gut_header "$(t obsidian_refreshing)"
+        rm -rf "$obsidian_dir"
+    else
+        gut_header "$(t obsidian_generating)"
+    fi
+
+    mkdir -p "$obsidian_dir/recipes"
+    mkdir -p "$obsidian_dir/prep"
+    mkdir -p "$obsidian_dir/plated"
+    mkdir -p "$obsidian_dir/pantry"
+    mkdir -p "$obsidian_dir/modes"
+    [[ -d "$GUT_SEASONING" ]] && mkdir -p "$obsidian_dir/seasoning"
+    [[ -d "$GUT_FLAME" ]] && mkdir -p "$obsidian_dir/flame"
+
+    local count=0
+
+    for f in "$GUT_RECIPES"/*.md; do
+        [[ -f "$f" ]] || continue
+        local name=$(basename "$f")
+        obsidian_enrich_recipe "$f" "$obsidian_dir/recipes/$name" "$project"
+        ((count++))
+        gut_print "  ${RECIPE} recipes/$name"
+    done
+
+    for f in "$GUT_PREP"/*.md; do
+        [[ -f "$f" ]] || continue
+        local name=$(basename "$f")
+        obsidian_enrich_prep "$f" "$obsidian_dir/prep/$name" "$project"
+        ((count++))
+        gut_print "  ${PREP} prep/$name"
+    done
+
+    for f in "$GUT_PLATED"/*.md; do
+        [[ -f "$f" ]] || continue
+        local name=$(basename "$f")
+        obsidian_enrich_note "$f" "$obsidian_dir/plated/$name" "$project" "plated"
+        ((count++))
+        gut_print "  🍽️  plated/$name"
+    done
+
+    for f in "$GUT_PANTRY"/*.md; do
+        [[ -f "$f" ]] || continue
+        local name=$(basename "$f")
+        obsidian_enrich_note "$f" "$obsidian_dir/pantry/$name" "$project" "pantry"
+        ((count++))
+        gut_print "  ${PANTRY} pantry/$name"
+    done
+
+    for f in "$GUT_MODES"/*.md; do
+        [[ -f "$f" ]] || continue
+        local name=$(basename "$f")
+        obsidian_enrich_note "$f" "$obsidian_dir/modes/$name" "$project" "modes"
+        ((count++))
+        gut_print "  🤖 modes/$name"
+    done
+
+    if [[ -d "$GUT_SEASONING" ]]; then
+        for f in "$GUT_SEASONING"/*.md; do
+            [[ -f "$f" ]] || continue
+            local name=$(basename "$f")
+            obsidian_enrich_note "$f" "$obsidian_dir/seasoning/$name" "$project" "seasoning"
+            ((count++))
+            gut_print "  🧂 seasoning/$name"
+        done
+    fi
+
+    if [[ -d "$GUT_FLAME" ]]; then
+        for f in "$GUT_FLAME"/*.md; do
+            [[ -f "$f" ]] || continue
+            local name=$(basename "$f")
+            obsidian_enrich_note "$f" "$obsidian_dir/flame/$name" "$project" "flame"
+            ((count++))
+            gut_print "  🔥 flame/$name"
+        done
+    fi
+
+    gut_print ""
+    obsidian_generate_dashboard "$obsidian_dir/Dashboard.md" "$project"
+    gut_print "  📊 Dashboard.md"
+    ((count++))
+
+    obsidian_generate_recipe_board "$obsidian_dir/Recipe Board.md" "$project"
+    gut_print "  📋 Recipe Board.md"
+    ((count++))
+
+    obsidian_generate_ai_modes "$obsidian_dir/AI Modes.md" "$project"
+    gut_print "  🤖 AI Modes.md"
+    ((count++))
+
+    if [[ -f ".gitignore" ]]; then
+        if ! grep -q "^\.gut/obsidian/" .gitignore 2>/dev/null; then
+            if ! grep -q "^\.gut/$" .gitignore 2>/dev/null; then
+                echo -e "\n# gut obsidian export (generated)\n.gut/obsidian/" >> .gitignore
+            fi
+        fi
+    fi
+
+    echo ""
+    gut_success "$(t obsidian_done) — $count files generated"
+    gut_print ""
+    gut_print "  Output: ${CYAN}${obsidian_dir}/${NC}"
+    gut_print ""
+    gut_print "  Open in Obsidian: Add ${CYAN}${obsidian_dir}${NC} as a vault"
+    gut_print "  Or run: ${CYAN}gut obsidian --open${NC}"
+    echo ""
+
+    if [[ "$open_after" == true ]]; then
+        local abs_path="$(cd "$obsidian_dir" && pwd)"
+        if command -v open &>/dev/null; then
+            open "obsidian://open?path=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$abs_path'))" 2>/dev/null || echo "$abs_path")"
+            gut_success "$(t obsidian_open)"
+        elif command -v xdg-open &>/dev/null; then
+            xdg-open "obsidian://open?path=$abs_path"
+            gut_success "$(t obsidian_open)"
+        else
+            gut_warn "Could not detect how to open Obsidian. Open manually: $abs_path"
+        fi
+    fi
+}
+
 cmd_update() {
     gut_header "🔄 Updating gut..."
 
@@ -3750,6 +4309,7 @@ main() {
         step|steps)  cmd_step "$@" ;;
         ingredients) cmd_ingredients "$@" ;;
         spoiled)     cmd_spoiled "$@" ;;
+        obsidian)    cmd_obsidian "$@" ;;
 
         # Meta
         version|-v|--version) cmd_version ;;

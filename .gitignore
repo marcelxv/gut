@@ -1,2 +1,5 @@
 .DS_Store
 website/
+
+# gut obsidian export (generated)
+.gut/obsidian/

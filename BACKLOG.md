@@ -2,6 +2,22 @@
 
 ## Next Up
 
+### Obsidian Export (`gut obsidian`)
+Generate Obsidian-ready markdown from `.gut/` — enriched with wikilinks, frontmatter tags, callouts, and Mermaid diagrams. Non-destructive output to `.gut/obsidian/`.
+
+```bash
+gut obsidian              # generate vault from .gut/
+gut obsidian --refresh    # regenerate after changes
+gut obsidian --open       # generate + open in Obsidian
+```
+
+Generates 3 hub notes (Dashboard, Recipe Board, AI Modes) and enriched copies of all recipes, preps, plated, pantry, and modes with cross-linking. No Obsidian plugins required.
+
+Recipe: `.gut/recipes/add-obsidian-export.md`
+Prep: `.gut/prep/add-obsidian-export.md`
+
+---
+
 ### AI Integration Prompts
 Add suggested prompts that work well with different AI assistants.
 
